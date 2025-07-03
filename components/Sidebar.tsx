@@ -14,6 +14,8 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
+  Users2,
+  UserRoundSearch,
 } from "lucide-react"
 
 export default function Sidebar({
@@ -31,8 +33,11 @@ export default function Sidebar({
     { label: "Analytics", icon: <BarChart3 size={20} />, href: "/analytics" },
     { label: "Reports", icon: <FileText size={20} />, href: "/reports" },
     { label: "Clients", icon: <Users size={20} />, href: "/clients" },
-    { label: "Leads", icon: <UserPlus size={20} />, href: "/leads" },
+    { label: "Leads", icon: <Users2 size={20} />, href: "/leads" },
     { label: "Leads Information", icon: <UserCheck size={20} />, href: "/lead-information" },
+           { label: "Lead Assignment", icon: <UserPlus size={20} />, href: "/lead-assignment" },
+    { label: "Executive Information", icon: <UserRoundSearch size={20} />, href: "/executives" },
+
     { label: "Talk to your data", icon: <MessageSquare size={20} />, href: "/ttyd" },
     { label: "Settings", icon: <Settings size={20} />, href: "/settings" },
   ]
@@ -99,7 +104,7 @@ export default function Sidebar({
       </div>
 
       {/* Navigation Links */}
-      <nav className="flex-1 px-3 py-6 space-y-1">
+      <nav className="flex-1 px-3 py-4 space-y-1">
         {navItems.map(({ label, icon, href }) => {
           const isActive = pathname === href
           

@@ -42,11 +42,12 @@ const pageConfig = {
     icon: <UserCheck size={24} />,
     description: "Detailed lead profiles and data"
   },
-  "/leads": {
-    title: "Leads",
+  "/lead-assignment": {
+    title: "Lead Assignment",
     icon: <UserPlus size={24} />,
-    description: "Manage and track your leads"
+    description: "Assign leads to executives and track progress"
   },
+
   "/ttyd": {
     title: "Talk to your data",
     icon: <MessageSquare size={24} />,

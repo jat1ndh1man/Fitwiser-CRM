@@ -10,6 +10,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Badge } from "@/components/ui/badge"
+import { useRouter } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
   Calendar as CalendarIcon,
@@ -486,6 +488,21 @@ export default function LeadInformationTab() {
   useEffect(() => {
     fetchLeads()
   }, [])
+
+  useEffect(() => {
+  // Get URL parameters
+  const urlParams = new URLSearchParams(window.location.search)
+  const leadId = urlParams.get('leadId')
+  const tab = urlParams.get('tab')
+  
+  // Auto-select lead if leadId is provided in URL and leads are loaded
+  if (leadId && leads.length > 0 && !selectedLead) {
+    const leadExists = leads.find(lead => lead.id === leadId)
+    if (leadExists) {
+      handleLeadSelection(leadId)
+    }
+  }
+}, [leads, selectedLead])
 
   // Utility functions
   const toggleSection = (section: string) => {
