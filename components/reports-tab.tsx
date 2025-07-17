@@ -53,6 +53,31 @@ interface BalanceReport {
   paymentMethod: string
 }
 
+interface ActivationReport {
+  id: string
+  clientName: string
+  package: string
+  joiningDate: string
+  activationDate: string
+  activationDelay: number
+  status: string
+  counselor: string
+  activatedBy: string
+  notes: string | null
+}
+
+
+interface SalesReport {
+  id: string
+  date: string
+  clientName: string
+  package: string
+  amount: number
+  counselor: string
+  status: string     
+  source: string
+}
+
 interface ConversionReport {
   id: string
   leadName: string
@@ -67,6 +92,9 @@ interface ConversionReport {
   touchpoints: number
   email: string
   phone: string
+   paymentCount: number
+  totalPaid:    number
+  lastPayment:  string | null
 }
 
 interface ExpiryReport {
@@ -84,21 +112,6 @@ interface ExpiryReport {
 }
 
 // Static data for reports not yet implemented
-const salesReports = [
-  {
-    id: 1,
-    date: "2024-01-15",
-    clientName: "John Doe",
-    package: "Premium",
-    amount: 2500,
-    counselor: "Sarah Johnson",
-    paymentMethod: "Credit Card",
-    status: "Completed",
-    commission: 250,
-    source: "Website",
-  },
-  // Add more static data as needed
-]
 
 const followUpReports = [
   {
@@ -145,13 +158,15 @@ export function ReportsTab() {
   const [dateRange, setDateRange] = useState<DateRange | undefined>()
   const [sortField, setSortField] = useState<SortField | null>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>(null)
-
+  
   // Dynamic data states
   const [balanceReports, setBalanceReports] = useState<BalanceReport[]>([])
   const [conversionReports, setConversionReports] = useState<ConversionReport[]>([])
   const [expiryReports, setExpiryReports] = useState<ExpiryReport[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [salesReports, setSalesReports] = useState<SalesReport[]>([])
+  const [activationReports, setActivationReports] = useState<ActivationReport[]>([])
 
   // Fetch balance reports from payment_links and manual_payment tables
   const fetchBalanceReports = async () => {
@@ -199,7 +214,7 @@ export function ReportsTab() {
           id: `pl_${payment.id}`,
           clientName,
           email: payment.users?.email || "",
-          package: payment.description || "Standard",
+          package: payment.plan || payment.description || "Standard",
           totalAmount,
           amountPaid,
           balance,
@@ -224,7 +239,7 @@ export function ReportsTab() {
           id: `mp_${payment.id}`,
           clientName,
           email: payment.users?.email || "",
-          package: payment.description || "Standard",
+          package: payment.plan || payment.description || "Standard",
           totalAmount,
           amountPaid,
           balance,
@@ -244,75 +259,103 @@ export function ReportsTab() {
     }
   }
 
-  // Fetch conversion reports by comparing leads with users
-  const fetchConversionReports = async () => {
-    try {
-      setLoading(true)
-      setError(null)
+const fetchConversionReports = async () => {
+  try {
+    setLoading(true)
+    setError(null)
 
-      // Fetch all leads
-      const { data: leads, error: leadsError } = await supabase.from("leads").select("*")
+    // 1) load leads + users
+    const { data: leads, error: leadsErr } = await supabase.from("leads").select("*")
+    if (leadsErr) throw leadsErr
 
-      if (leadsError) throw leadsError
+    const { data: users, error: usersErr } = await supabase
+      .from("users")
+      .select("id,email,phone,first_name,last_name,created_at")
+    if (usersErr) throw usersErr
 
-      // Fetch all users
-      const { data: users, error: usersError } = await supabase.from("users").select(`
-  id,
-  email,
-  phone,
-  first_name,
-  last_name,
-  created_at
-`)
+    // 2) load all payments (with lead_id)
+    const { data: linkPayments, error: lpErr } = await supabase
+      .from("payment_links")
+      .select("lead_id, user_id, amount,payment_date")
+    if (lpErr) throw lpErr
 
-      if (usersError) throw usersError
+    const { data: manualPayments, error: mpErr } = await supabase
+      .from("manual_payment")
+      .select("lead_id, user_id, amount, payment_date")
+    if (mpErr) throw mpErr
 
-      // Process conversion data
-      const conversionData: ConversionReport[] = (leads || []).map((lead: any) => {
-        // Find matching user by email or phone
-        const matchedUser = (users || []).find(
-          (user: any) => user.email === lead.email || user.phone === lead.phone_number,
-        )
+    // 3) group payments by lead_id
+    const paymentsByLead = [...(linkPayments||[]), ...(manualPayments||[])]
+      .reduce<Record<string, { amount: number; payment_date: string }[]>>((acc, p) => {
+        if (!p.lead_id) return acc
+        acc[p.lead_id] = acc[p.lead_id] || []
+        acc[p.lead_id].push({ amount: p.amount, payment_date: p.payment_date })
+        return acc
+      }, {})
 
-        const isConverted = !!matchedUser
-        const leadDate = lead.created_at
-        const conversionDate = matchedUser?.created_at || null
+      const paymentsByUser = [...(linkPayments||[]), ...(manualPayments||[])]
+  .reduce<Record<string, { amount: number; payment_date: string }[]>>((acc, p) => {
+    if (!p.user_id) return acc
+    acc[p.user_id] = acc[p.user_id] || []
+    acc[p.user_id].push({ amount: p.amount, payment_date: p.payment_date })
+    return acc
+  }, {})
 
-        // Use lead name for lead name, and user's full name if converted
-        const leadName = lead.name || "Unknown Lead"
+    // 4) map leads → ConversionReport
+    const conversionData: ConversionReport[] = (leads||[]).map((lead: any) => {
+  const matched = users.find(u => u.email === lead.email || u.phone === lead.phone_number)
+  const isConverted = !!matched
 
-        let daysTaken = null
-        if (isConverted && leadDate && conversionDate) {
-          const leadDateTime = new Date(leadDate).getTime()
-          const conversionDateTime = new Date(conversionDate).getTime()
-          daysTaken = Math.ceil((conversionDateTime - leadDateTime) / (1000 * 60 * 60 * 24))
-        }
+  // payment history - combine payments from both lead_id and user_id
+  const leadPayments = paymentsByLead[lead.id] || []
+  const userPayments = matched ? (paymentsByUser[matched.id] || []) : []
+  
+  // Combine and deduplicate payments (in case same payment exists in both)
+  const allPayments = [...leadPayments, ...userPayments]
+  const uniquePayments = allPayments.filter((payment, index, self) => 
+    index === self.findIndex(p => p.payment_date === payment.payment_date && p.amount === payment.amount)
+  )
+  
+  const paymentCount = uniquePayments.length
+  const totalPaid = uniquePayments.reduce((sum, p) => sum + p.amount, 0)
+  const lastPaymentIso = uniquePayments
+    .map(p => p.payment_date)
+    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null
 
-        return {
-          id: lead.id,
-          leadName: leadName,
-          leadDate: leadDate,
-          conversionDate: conversionDate,
-          daysTaken,
-          source: lead.source || "Unknown",
-          counselor: lead.counselor || "Unassigned",
-          package: matchedUser ? "Standard" : null, // You might want to determine this from payment data
-          amount: null, // You might want to fetch this from payment data
-          status: isConverted ? "Converted" : "Lost",
-          touchpoints: 1, // You might want to calculate this based on follow-up data
-          email: lead.email || "",
-          phone: lead.phone_number || "",
-        }
-      })
+  return {
+    id:             lead.id,
+    leadName:       lead.name || "–",
+    leadDate:       lead.created_at,
+    conversionDate: matched?.created_at || null,
+    daysTaken:      matched
+                     ? Math.ceil((new Date(matched.created_at).getTime()
+                                  - new Date(lead.created_at).getTime())
+                                 / (1000*60*60*24))
+                     : null,
+    source:         lead.source || "Unknown",
+    counselor:      lead.counselor || "Unassigned",
+    package:        matched ? "Standard" : null,
+    amount:         null,
+    status:         isConverted ? "Converted" : "Lost",
+    touchpoints:    1,
+    email:          lead.email,
+    phone:          lead.phone_number,
 
-      setConversionReports(conversionData)
-    } catch (err) {
-      console.error("Error fetching conversion reports:", err)
-      setError("Failed to fetch conversion reports")
-    } finally {
-      setLoading(false)
-    }
+    // ── UPDATED ──
+    paymentCount,
+    totalPaid,
+    lastPayment: lastPaymentIso,
   }
+})
+
+    setConversionReports(conversionData)
+  } catch (err) {
+    console.error(err)
+    setError("Failed to fetch conversion reports")
+  } finally {
+    setLoading(false)
+  }
+}
 
   // Fetch membership expiry data from payment tables
   const fetchExpiryReports = async () => {
@@ -394,7 +437,7 @@ export function ReportsTab() {
           return {
             id: `mp_${payment.id}`,
             clientName,
-            package: payment.description || "Standard",
+            package: payment.plan|| payment.description || "Standard",
             activationDate: payment.payment_date || payment.created_at,
             expiryDate: payment.plan_expiry,
             daysRemaining,
@@ -415,12 +458,184 @@ export function ReportsTab() {
     }
   }
 
+  const fetchActivationReports = async () => {
+  try {
+    setLoading(true)
+    setError(null)
+
+    // 1) load assignments
+    const { data: assignments, error: asnErr } = await supabase
+      .from("lead_assignments")
+      .select("lead_id,assigned_to,assigned_by")
+    if (asnErr) throw asnErr
+
+    // 2) load leads
+    const { data: leads, error: leadErr } = await supabase
+      .from("leads")
+      .select("id, created_at")
+    if (leadErr) throw leadErr
+
+    // 3) load completed payment_links
+    const { data: linkPayments, error: linkErr } = await supabase
+      .from("payment_links")
+      .select(`id, created_at, description, plan, payment_date, lead_id, users(first_name,last_name)`)
+      .eq("status", "completed")
+    if (linkErr) throw linkErr
+
+    // 4) load completed manual_payment
+    const { data: manualPayments, error: manErr } = await supabase
+      .from("manual_payment")
+      .select(`id, created_at, description, plan, payment_date,  lead_id, users(first_name,last_name)`)
+      .eq("status", "completed")
+    if (manErr) throw manErr
+
+    // 5) gather all exec & assigner IDs
+    const userIds = Array.from(new Set(assignments.flatMap(a => [a.assigned_to, a.assigned_by])))
+    const { data: users, error: userErr } = await supabase
+      .from("users")
+      .select("id, first_name, last_name")
+      .in("id", userIds)
+    if (userErr) throw userErr
+
+    // 6) merge & map into ActivationReport[]
+    const allPayments = [...(linkPayments||[]), ...(manualPayments||[])]
+    const reports: ActivationReport[] = allPayments
+      .map(p => {
+        const asn = assignments.find(a => a.lead_id === p.lead_id)
+        const lead = leads?.find(l => l.id === p.lead_id)
+        if (!asn || !lead) return null
+
+        const clientName = p.users
+          ? `${p.users.first_name} ${p.users.last_name}`.trim()
+          : "Unknown User"
+
+        const joiningDate    = lead.created_at
+        const activationDate = p.payment_date ?? p.created_at
+        const activationDelay = Math.ceil(
+          (new Date(activationDate).getTime() - new Date(joiningDate).getTime())
+          / (1000 * 60 * 60 * 24)
+        )
+
+        const counselor   = users.find(u => u.id === asn.assigned_to)
+        const activatedBy = users.find(u => u.id === asn.assigned_by)
+
+        return {
+          id:               p.id,
+          clientName,
+          package:          p.plan || p.description || "Standard",
+          joiningDate,
+          activationDate,
+          activationDelay,
+          status:           activationDate ? "Active" : "Pending",
+          counselor:        counselor   ? `${counselor.first_name} ${counselor.last_name}`   : "Unassigned",
+          activatedBy:      activatedBy ? `${activatedBy.first_name} ${activatedBy.last_name}` : "Unknown",
+          notes:            (p as any).notes ?? null,
+        }
+      })
+      .filter((r): r is ActivationReport => r !== null)
+
+    setActivationReports(reports)
+  } catch (err) {
+    console.error("Error fetching activation reports:", err)
+    setError("Failed to fetch activation reports")
+  } finally {
+    setLoading(false)
+  }
+}
+
+
+  // Fetch exec assignments + payments, then join in JS
+const fetchSalesReports = async () => {
+  try {
+    setLoading(true)
+    setError(null)
+
+    // 1) load all assignments
+    const { data: assignments, error: asnErr } = await supabase
+      .from("lead_assignments")
+      .select("lead_id,assigned_to")
+    if (asnErr) throw asnErr
+
+    // 1b) load all leads so we can read the source
+const { data: leads, error: leadsErr } = await supabase
+  .from("leads")
+  .select("id, source")
+if (leadsErr) throw leadsErr
+
+    // 2) load all completed payment_links
+    const { data: linkPayments, error: linkErr } = await supabase
+      .from("payment_links")
+      .select(`id, created_at, amount, description, plan, status, lead_id, users(first_name,last_name)`)
+      .eq("status", "completed")
+    if (linkErr) throw linkErr
+
+    // 3) load all completed manual payments
+    const { data: manualPayments, error: manErr } = await supabase
+      .from("manual_payment")
+      .select(`id, created_at, amount, description, plan,  status, lead_id, users(first_name,last_name)`)
+      .eq("status", "completed")
+    if (manErr) throw manErr
+
+    console.log("🤝 assignments:", assignments)
+    console.log("💳 linkPayments:", linkPayments)
+    console.log("✍️ manualPayments:", manualPayments)
+
+    // 4) load all executives’ profiles
+    const execIds = Array.from(new Set(assignments.map(a => a.assigned_to)))
+    const { data: execProfiles, error: execErr } = await supabase
+      .from("users")
+      .select(`id, first_name, last_name`)
+      .in("id", execIds)
+    if (execErr) throw execErr
+
+    // 5) combine & map
+    const allPayments = [...(linkPayments||[]), ...(manualPayments||[])]
+    const reports: SalesReport[] = allPayments
+      // only those with an assignment
+      .filter(p => assignments.some(a => a.lead_id === p.lead_id))
+      .map(p => {
+        const asn = assignments.find(a => a.lead_id === p.lead_id)!
+        const exec = execProfiles?.find(u => u.id === asn.assigned_to)
+        const name = p.users
+          ? `${p.users.first_name} ${p.users.last_name}`.trim()
+          : "Unknown"
+           const leadRec = leads.find(l => l.id === p.lead_id)
+        return {
+          id:        `${p.id}`,                      // pl_ or mp_ if you want
+          date:      p.created_at,
+          clientName:name,
+          package:   p.plan,
+          amount:    p.amount,
+          counselor: exec
+            ? `${exec.first_name} ${exec.last_name}`
+            : "Unassigned",
+         status:     p.status === "completed" ? "Completed" : p.status,  
+         source:     leadRec?.source || "Unknown",
+        }
+      })
+
+    setSalesReports(reports)
+  } catch (err) {
+    console.error("Error fetching sales reports:", err)
+    setError("Failed to fetch sales reports")
+  } finally {
+    setLoading(false)
+  }
+}
+
+
   // Fetch data when report type changes
   useEffect(() => {
     switch (activeReport) {
       case "balance":
         fetchBalanceReports()
         break
+          case "sales":
+      fetchSalesReports()
+      break
+       case "activation":
+      fetchActivationReports()
+      break
       case "conversion":
         fetchConversionReports()
         break
@@ -538,13 +753,13 @@ export function ReportsTab() {
       case "balance":
         return getFilteredAndSortedData(balanceReports, ["clientName", "package", "status"])
       case "sales":
-        return getFilteredAndSortedData(salesReports, ["clientName", "package", "counselor"])
+        return getFilteredAndSortedData(salesReports, ["clientName", "package", "counselor" , "status", "source"])
       case "followup":
         return getFilteredAndSortedData(followUpReports, ["leadName", "counselor", "status"])
       case "conversion":
         return getFilteredAndSortedData(conversionReports, ["leadName", "source", "counselor"])
-      case "activation":
-        return getFilteredAndSortedData(membershipActivation, ["clientName", "package", "counselor"])
+     case "activation":
+       return getFilteredAndSortedData(activationReports, ["clientName","package","counselor"])
       case "expiry":
         return getFilteredAndSortedData(expiryReports, ["clientName", "package", "status"])
       default:
@@ -562,12 +777,12 @@ export function ReportsTab() {
           totalBalance: balanceReports.reduce((sum, r) => sum + r.balance, 0),
         }
       case "sales":
-        return {
-          total: salesReports.length,
-          completed: salesReports.filter((r) => r.status === "Completed").length,
-          totalRevenue: salesReports.reduce((sum, r) => sum + r.amount, 0),
-          totalCommission: salesReports.reduce((sum, r) => sum + r.commission, 0),
-        }
+       return {
+         total: salesReports.length,
+         completed: salesReports.filter(r=>r.status==="Completed").length,
+         totalRevenue: salesReports.reduce((sum, r) => sum + r.amount, 0),
+       }
+
       case "followup":
         return {
           total: followUpReports.length,
@@ -589,18 +804,18 @@ export function ReportsTab() {
               : "0",
         }
       case "activation":
-        return {
-          total: membershipActivation.length,
-          active: membershipActivation.filter((r) => r.status === "Active").length,
-          pending: membershipActivation.filter((r) => r.status === "Pending").length,
-          avgDelay:
-            membershipActivation.filter((r) => r.activationDelay).length > 0
-              ? (
-                  membershipActivation.filter((r) => r.activationDelay).reduce((sum, r) => sum + r.activationDelay, 0) /
-                  membershipActivation.filter((r) => r.activationDelay).length
-                ).toFixed(1)
-              : "0",
-        }
+       return {
+    total:   activationReports.length,
+    active:  activationReports.filter(r => r.status === "Active").length,
+    pending: activationReports.filter(r => r.status === "Pending").length,
+    avgDelay:
+      activationReports.length > 0
+        ? (
+            activationReports.reduce((sum, r) => sum + r.activationDelay, 0) /
+            activationReports.length
+          ).toFixed(1)
+        : "0",
+  }
       case "expiry":
         return {
           total: expiryReports.length,
@@ -887,7 +1102,7 @@ export function ReportsTab() {
             <CardContent>
               <div className="text-2xl font-bold text-emerald-600">
                 {typeof value === "number" && key.includes("total") && key !== "total"
-                  ? `$${value.toLocaleString()}`
+                  ? `₹${value.toLocaleString()}`
                   : value}
               </div>
               <p className="text-xs text-slate-600">
@@ -1061,16 +1276,7 @@ export function ReportsTab() {
                           {getSortIcon("counselor")}
                         </Button>
                       </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("commission")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Commission
-                          {getSortIcon("commission")}
-                        </Button>
-                      </TableHead>
+                    
                       <TableHead>
                         <Button
                           variant="ghost"
@@ -1225,6 +1431,9 @@ export function ReportsTab() {
                         </Button>
                       </TableHead>
                       <TableHead>Email</TableHead>
+                        <TableHead>Payments</TableHead>
+    <TableHead>Total Paid</TableHead>
+    <TableHead>Last Payment</TableHead>
                     </>
                   )}
 
@@ -1389,20 +1598,24 @@ export function ReportsTab() {
                             <DollarSign className="h-3 w-3" />${item.totalAmount.toLocaleString()}
                           </div>
                         </TableCell>
-                        <TableCell className="font-medium text-blue-600">
-                          <div className="flex items-center gap-1">
-                            <DollarSign className="h-3 w-3" />${item.amountPaid.toLocaleString()}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {item.balance > 0 ? (
-                            <div className="flex items-center gap-1 text-red-600 font-medium">
-                              <AlertTriangle className="h-3 w-3" />${item.balance}
-                            </div>
-                          ) : (
-                            <span className="text-emerald-600 font-medium">Paid</span>
-                          )}
-                        </TableCell>
+                        
+                        {/* Amount Paid */}
+                    <TableCell className="font-medium text-emerald-600">
+                      <div className="flex items-center gap-1">
+                        <DollarSign className="h-3 w-3" />${item.amountPaid.toLocaleString()}
+                      </div>
+                    </TableCell>
+
+                    {/* Balance */}
+                    <TableCell>
+                      {item.balance > 0 ? (
+                        <div className="flex items-center gap-1 text-red-600 font-medium">
+                          <AlertTriangle className="h-3 w-3" />${item.balance.toLocaleString()}
+                        </div>
+                      ) : (
+                        <span className="text-emerald-600 font-medium">Paid</span>
+                      )}
+                    </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <CalendarIcon className="h-3 w-3 text-slate-500" />
@@ -1433,7 +1646,7 @@ export function ReportsTab() {
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <CalendarIcon className="h-3 w-3 text-emerald-600" />
-                            {item.date}
+                             {format(new Date(item.date), "LLL dd, yyyy")}
                           </div>
                         </TableCell>
                         <TableCell className="font-medium">{item.clientName}</TableCell>
@@ -1444,7 +1657,7 @@ export function ReportsTab() {
                         </TableCell>
                         <TableCell className="font-medium text-emerald-600">
                           <div className="flex items-center gap-1">
-                            <DollarSign className="h-3 w-3" />${item.amount.toLocaleString()}
+                            ₹{item.amount.toLocaleString()}
                           </div>
                         </TableCell>
                         <TableCell>
@@ -1453,11 +1666,7 @@ export function ReportsTab() {
                             {item.counselor}
                           </div>
                         </TableCell>
-                        <TableCell className="font-medium text-blue-600">
-                          <div className="flex items-center gap-1">
-                            <DollarSign className="h-3 w-3" />${item.commission}
-                          </div>
-                        </TableCell>
+                       
                         <TableCell>
                           <Badge
                             className={
@@ -1591,6 +1800,23 @@ export function ReportsTab() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-sm text-slate-600">{item.email}</TableCell>
+                        <TableCell>{item.paymentCount}</TableCell>
+
+<TableCell className="font-medium text-emerald-600">
+  ₹{item.totalPaid.toLocaleString()}
+</TableCell>
+
+<TableCell>
+  {item.lastPayment ? (
+    <div className="flex items-center gap-1">
+      <CalendarIcon className="h-3 w-3 text-slate-500" />
+      {format(new Date(item.lastPayment), "LLL dd, yyyy")}
+    </div>
+  ) : (
+    "N/A"
+  )}
+</TableCell>
+
                       </>
                     )}
 
@@ -1605,13 +1831,13 @@ export function ReportsTab() {
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <CalendarIcon className="h-3 w-3 text-slate-500" />
-                            {item.joiningDate}
+                            {format(new Date(item.joiningDate), "LLL dd, yyyy")}
                           </div>
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <CalendarIcon className="h-3 w-3 text-emerald-600" />
-                            {item.activationDate || "Pending"}
+                            {format(new Date(item.activationDate), "LLL dd, yyyy") || "Pending"}
                           </div>
                         </TableCell>
                         <TableCell>
@@ -1661,7 +1887,7 @@ export function ReportsTab() {
                       <>
                         <TableCell className="font-medium">{item.clientName}</TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="border-emerald-200 text-emerald-700">
+                          <Badge variant="outline" className="border-emerald-200 text-emerald-700 whitespace-normal max-w-xs  text-center  px-2 py-1 break-words text-xs">
                             {item.package}
                           </Badge>
                         </TableCell>

@@ -173,14 +173,14 @@ export function DashboardTab() {
         if (manualPaymentsError) throw manualPaymentsError
         setManualPayments(manualPaymentsData || [])
 
-        // Fetch total clients
-        const { data: clientsData, error: clientsError } = await supabase
-          .from('users')
-          .select('id')
-          .eq('role_id', '3b9aeecb-3f68-434e-bc63-4f30f7bde8f1')
+       // Fetch assigned leads count
+ const { data: assignedLeadsData, error: assignedLeadsError } = await supabase
+   .from('leads')
+   .select('id')
+   .eq('status', 'assigned')
 
-        if (clientsError) throw clientsError
-        setTotalClients(clientsData?.length || 0)
+ if (assignedLeadsError) throw assignedLeadsError
+ setTotalClients(assignedLeadsData?.length || 0)
 
         // Calculate total revenue
         const completedPaymentLinks = paymentLinksData?.filter(p => p.status === 'completed') || []
@@ -561,7 +561,7 @@ export function DashboardTab() {
             <div className={`absolute top-0 left-0 right-0 h-1 ${data.isSpecial ? data.color : data.color}`} />
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className={`text-sm font-medium capitalize ${data.isSpecial ? 'text-slate-800 font-semibold' : 'text-slate-700'}`}>
-                {key === "totalClients" ? "Total Clients" : key === "totalRevenue" ? "Total Revenue" : key}
+                {key === "totalClients" ? "Assigned Leads" : key === "totalRevenue" ? "Total Revenue" : key}
               </CardTitle>
               <div className={`p-2 rounded-full text-white group-hover:scale-110 transition-transform ${
                 data.isSpecial 
@@ -572,9 +572,9 @@ export function DashboardTab() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className={`text-2xl font-bold ${data.isSpecial ? 'text-slate-800' : data.textColor}`}>
+             <div className={`text-5xl font-bold ${data.isSpecial ? 'text-slate-800' : data.textColor}`}>
                 {key === "totalRevenue" ? (
-                  <div className="flex items-center">
+                  <div className="flex text-xl items-center">
                     <IndianRupee className="h-5 w-5 mr-1" />
                     {data.count.toLocaleString()}
                   </div>
@@ -582,18 +582,7 @@ export function DashboardTab() {
                   data.count
                 )}
               </div>
-              <div className="flex items-center text-xs text-slate-500 mt-1">
-                {data.change > 0 ? (
-                  <TrendingUp className="h-3 w-3 mr-1 text-emerald-500" />
-                ) : (
-                  <TrendingDown className="h-3 w-3 mr-1 text-red-500" />
-                )}
-                <span className={data.change > 0 ? "text-emerald-500" : "text-red-500"}>
-                  {data.change > 0 ? "+" : ""}
-                  {key === "totalRevenue" ? `₹${data.change.toLocaleString()}` : data.change}
-                </span>
-                <span className="ml-1">from last month</span>
-              </div>
+             
             </CardContent>
           </Card>
         ))}

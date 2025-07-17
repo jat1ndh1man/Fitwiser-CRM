@@ -153,6 +153,9 @@ interface Bill {
 }
 
 export default function LeadInformationTab() {
+ const router = useRouter()
+
+ const searchParams = useSearchParams()
   const supabase = createClient(
    process.env.NEXT_PUBLIC_SUPABASE_URL!,
    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -195,14 +198,14 @@ export default function LeadInformationTab() {
   })
   
   const [collapsedSections, setCollapsedSections] = useState({
-    contact: false,
-    leadManagement: false,
-    fitnessGoals: false,
-    investment: false,
-    additionalInfo: false,
-    interactionHistory: false,
-    comments: false,
-    billing: false,
+    contact: true,
+    leadManagement: true,
+    fitnessGoals: true,
+    investment: true,
+    additionalInfo: true,
+    interactionHistory: true,
+    comments: true,
+    billing: true ,
   })
 
   // Fetch all leads
@@ -310,6 +313,7 @@ export default function LeadInformationTab() {
   const handleLeadSelection = async (leadId: string) => {
     setLoading(true)
     try {
+        router.replace(`?tab=lead-information&leadId=${leadId}`, { scroll: false })
       const lead = leads.find(l => l.id === leadId)
       if (!lead) return
 
@@ -489,20 +493,16 @@ export default function LeadInformationTab() {
     fetchLeads()
   }, [])
 
-  useEffect(() => {
-  // Get URL parameters
-  const urlParams = new URLSearchParams(window.location.search)
-  const leadId = urlParams.get('leadId')
-  const tab = urlParams.get('tab')
-  
-  // Auto-select lead if leadId is provided in URL and leads are loaded
-  if (leadId && leads.length > 0 && !selectedLead) {
-    const leadExists = leads.find(lead => lead.id === leadId)
-    if (leadExists) {
-      handleLeadSelection(leadId)
+ useEffect(() => {
+    const leadId = searchParams.get('leadId')
+    const tab    = searchParams.get('tab')
+    if (tab === 'lead-information' && leadId && leads.length > 0) {
+      // only re-select if it’s different
+      if (!selectedLead || selectedLead.id !== leadId) {
+        handleLeadSelection(leadId)
+      }
     }
-  }
-}, [leads, selectedLead])
+  }, [leads, selectedLead, searchParams])
 
   // Utility functions
   const toggleSection = (section: string) => {

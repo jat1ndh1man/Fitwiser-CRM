@@ -8,23 +8,25 @@ export default function Home() {
   const router = useRouter()
 
   useEffect(() => {
-    // Check if we're in the browser environment
-    if (typeof window !== "undefined") {
-      // Check for existing session in localStorage
-      const session = localStorage.getItem("session") // or whatever key you use for session
-      // You might also check for token, user, authToken, etc.
-      
-      if (session) {
-        // User has an existing session, redirect to dashboard
-        router.push("/dashboard")
-      } else {
-        // No session found, redirect to login
-        router.push("/login")
-      }
+    if (typeof window === "undefined") return
+
+    // Try to grab the raw JSON string for your user profile
+    const storedProfile = localStorage.getItem("userProfile")
+    // (Optional) also check whatever session key you might be storing
+    const storedSession = localStorage.getItem("session")
+
+    if (storedProfile) {
+      // we have a profile object — user is "logged in"
+      router.push("/dashboard")
+    } else if (storedSession) {
+      // fallback: maybe you just stored a session token
+      router.push("/dashboard")
+    } else {
+      // no profile or session → force to login
+      router.push("/login")
     }
   }, [router])
 
-  // Optional: Show a loading state while checking session
   return (
     <div className="flex items-center justify-center min-h-screen">
       <div className="text-center">
@@ -34,3 +36,4 @@ export default function Home() {
     </div>
   )
 }
+

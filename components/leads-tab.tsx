@@ -1,5 +1,5 @@
 "use client"
-
+import { Session } from '@supabase/supabase-js'
 import { useState, useMemo, useEffect } from "react"
 import { useSearchParams, useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -401,6 +401,11 @@ export function LeadsTab() {
     })
     setSelectedDate(lead.follow_up_date ? new Date(lead.follow_up_date) : undefined)
     setIsEditDialogOpen(true)
+  }
+
+    const handleRowClick = (id: string) => {
+    // adjust this URL to whatever route or query your Lead Information tab listens to:
+  router.push(`/lead-information?tab=lead-information&leadId=${id}`)
   }
 
   // Load leads on component mount
@@ -1184,8 +1189,12 @@ export function LeadsTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredAndSortedLeads.map((lead) => (
-                <TableRow key={lead.id} className="hover:bg-emerald-50/50">
+             {filteredAndSortedLeads.map((lead) => (
+              <TableRow
+                key={lead.id}
+                onClick={() => handleRowClick(lead.id)}
+                className="cursor-pointer hover:bg-emerald-50/50"
+              >
                   <TableCell>
                     <div className="flex items-center gap-1 text-sm">
                       <CalendarIcon className="h-3 w-3 text-emerald-600" />

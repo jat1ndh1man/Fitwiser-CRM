@@ -182,16 +182,16 @@ export default function ExecutiveInformationPage() {
   const [statusFilter, setStatusFilter] = useState("all")
   
   const [collapsedSections, setCollapsedSections] = useState({
-    contact: false,
-    professional: false,
-    performance: false,
-    leadManagement: false,
-    skills: false,
-    availability: false,
-    recognition: false,
-    training: false,
-    administrative: false,
-    notes: false,
+    contact: true,
+    professional: true,
+    performance: true,
+    leadManagement: true,
+    skills: true,
+    availability: true,
+    recognition: true,
+    training: true,
+    administrative: true,
+    notes: true,
   })
 
   // Executive role ID
@@ -633,55 +633,6 @@ export default function ExecutiveInformationPage() {
             </CardContent>
           </Card>
 
-          {/* Debug Information - Remove in production */}
-          {selectedExecutive && (
-            <Card className="border-0 shadow-xl bg-yellow-50/50 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-yellow-700">
-                  <AlertCircle className="h-5 w-5" />
-                  Debug Information (Remove in Production)
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                  <div>
-                    <strong>Executive ID:</strong> {selectedExecutive.id}
-                  </div>
-                  <div>
-                    <strong>Assignments Fetched:</strong> {assignments.length}
-                  </div>
-                  <div>
-                    <strong>Active Count:</strong> {currentMetrics.activeAssignments}
-                  </div>
-                  <div>
-                    <strong>Completed Count:</strong> {currentMetrics.completedAssignments}
-                  </div>
-                  <div>
-                    <strong>Total Assigned:</strong> {currentMetrics.totalAssignments}
-                  </div>
-                  <div>
-                    <strong>Conversion Rate:</strong> {currentMetrics.conversionRate}%
-                  </div>
-                  <div>
-                    <strong>High Priority:</strong> {currentMetrics.highPriorityLeads}
-                  </div>
-                  <div>
-                    <strong>Overdue:</strong> {currentMetrics.overdueAssignments}
-                  </div>
-                </div>
-                <div className="mt-4">
-                  <strong>Assignment Statuses:</strong>
-                  <div className="mt-2 space-y-1">
-                    {assignments.map((a, i) => (
-                      <div key={i} className="text-xs">
-                        {i + 1}. {a.lead?.name || 'Unknown'} - Status: {a.status} - Priority: {a.priority} - Lead Priority: {a.lead?.priority}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
 
           {/* Contact & Personal Information */}
           <Collapsible open={!collapsedSections.contact} onOpenChange={() => toggleSection("contact")}>
@@ -1254,83 +1205,7 @@ export default function ExecutiveInformationPage() {
             </Card>
           </Collapsible>
 
-          {/* Skills & Specializations */}
-          <Collapsible open={!collapsedSections.skills} onOpenChange={() => toggleSection("skills")}>
-            <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-              <CollapsibleTrigger asChild>
-                <CardHeader className="cursor-pointer hover:bg-emerald-50/50 transition-colors">
-                  <CardTitle className="flex items-center justify-between text-emerald-700">
-                    <div className="flex items-center gap-2">
-                      <Star className="h-5 w-5" />
-                      Skills & Specializations
-                    </div>
-                    {collapsedSections.skills ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                  </CardTitle>
-                </CardHeader>
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label className="text-sm font-medium text-slate-700">Specializations</Label>
-                      <Textarea
-                        value={executiveInfo.specializations?.join(', ') || ""}
-                        onChange={(e) => setExecutiveInfo({
-                          ...executiveInfo, 
-                          specializations: e.target.value.split(',').map(s => s.trim()).filter(s => s)
-                        })}
-                        className="border-emerald-200"
-                        placeholder="e.g., B2B Sales, Enterprise Solutions, Lead Generation"
-                        rows={3}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-sm font-medium text-slate-700">Skills</Label>
-                      <Textarea
-                        value={executiveInfo.skills?.join(', ') || ""}
-                        onChange={(e) => setExecutiveInfo({
-                          ...executiveInfo, 
-                          skills: e.target.value.split(',').map(s => s.trim()).filter(s => s)
-                        })}
-                        className="border-emerald-200"
-                        placeholder="e.g., CRM Management, Cold Calling, Negotiation"
-                        rows={3}
-                      />
-                    </div>
-                  </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label className="text-sm font-medium text-slate-700">Certifications</Label>
-                      <Textarea
-                        value={executiveInfo.certifications?.join(', ') || ""}
-                        onChange={(e) => setExecutiveInfo({
-                          ...executiveInfo, 
-                          certifications: e.target.value.split(',').map(s => s.trim()).filter(s => s)
-                        })}
-                        className="border-emerald-200"
-                        placeholder="e.g., Salesforce Certified, HubSpot Certified"
-                        rows={2}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-sm font-medium text-slate-700">Languages Spoken</Label>
-                      <Textarea
-                        value={executiveInfo.languages_spoken?.join(', ') || ""}
-                        onChange={(e) => setExecutiveInfo({
-                          ...executiveInfo, 
-                          languages_spoken: e.target.value.split(',').map(s => s.trim()).filter(s => s)
-                        })}
-                        className="border-emerald-200"
-                        placeholder="e.g., English, Spanish, French"
-                        rows={2}
-                      />
-                    </div>
-                  </div>
-                </CardContent>
-              </CollapsibleContent>
-            </Card>
-          </Collapsible>
 
           {/* Recognition & Achievements */}
           <Collapsible open={!collapsedSections.recognition} onOpenChange={() => toggleSection("recognition")}>
