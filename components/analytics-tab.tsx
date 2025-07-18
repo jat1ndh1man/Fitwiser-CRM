@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
@@ -43,7 +43,13 @@ import {
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
+import { createClient } from '@supabase/supabase-js'
 
+// Supabase client setup - replace with your actual URL and anon key
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,     
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!  
+)
 // Enhanced data with comprehensive analytics
 const conversionAnalytics = {
   sourceWise: [
@@ -118,10 +124,6 @@ const cityAnalysis = [
   { city: "Hyderabad", clients: 76, revenue: 190000, avgValue: 2500, growth: 16.7 },
 ]
 
-const genderAnalysis = [
-  { gender: "Male", count: 312, percentage: 58.2, revenue: 780000, avgValue: 2500 },
-  { gender: "Female", count: 224, percentage: 41.8, revenue: 560000, avgValue: 2500 },
-]
 
 const sourceAnalysis = [
   { source: "Website", count: 145, percentage: 27.1, revenue: 362500, conversion: 46.2 },
@@ -203,6 +205,251 @@ export function AnalyticsTab() {
   const [coachFilter, setCoachFilter] = useState("all")
   const [searchTerm, setSearchTerm] = useState("")
   const [dateRange, setDateRange] = useState<DateRange | undefined>()
+  
+  const [genderAnalysisData, setGenderAnalysisData] = useState<
+  { gender: string; count: number; percentage: number }[]
+>([])
+  const [packageAnalysisData, setPackageAnalysisData] = useState<
+  { plan: string; count: number; revenue: number; avgValue: number }[]
+>([])
+  const [cityAnalysisData, setCityAnalysisData] = useState<
+  { city: string; clients: number; revenue: number; growth: number }[]
+>([])
+  const [salesData, setSalesData] = useState<
+  { month: string; [plan: string]: number }[]
+>([])
+
+useEffect(() => {
+  if (activeAnalytic !== 'gender') return
+  ;(async () => {
+    // fetch only the gender column
+    const { data, error } = await supabase
+      .from('users')
+      .select('gender')
+
+    if (error) {
+      console.error('Supabase error:', error.message)
+      return
+    }
+
+    const total = data!.length
+    const counts = data!.reduce((acc, { gender }) => {
+      const g = gender || 'Unknown'
+      acc[g] = (acc[g] ?? 0) + 1
+      return acc
+    }, {} as Record<string, number>)
+
+    setGenderAnalysisData(
+      Object.entries(counts).map(([gender, count]) => ({
+        gender,
+        count,
+        percentage: parseFloat(((count / total) * 100).toFixed(1)),
+      }))
+    )
+  })()
+}, [activeAnalytic])
+
+useEffect(() => {
+  if (activeAnalytic !== "package") return
+
+  ;(async () => {
+    // fetch plan & amount from both tables
+    const [{ data: manual, error: em }, { data: links, error: el }] = await Promise.all([
+      supabase.from("manual_payment").select("plan, amount"),
+      supabase.from("payment_links").select("plan, amount"),
+    ])
+
+    if (em || el) {
+      console.error(em ?? el)
+      return
+    }
+
+    const all = [...(manual || []), ...(links || [])]
+    const agg: Record<string, { count: number; revenue: number }> = {}
+
+    all.forEach(({ plan, amount }) => {
+      const p = plan || "Unknown"
+      if (!agg[p]) agg[p] = { count: 0, revenue: 0 }
+      agg[p].count += 1
+      agg[p].revenue += amount
+    })
+
+    const result = Object.entries(agg).map(([plan, { count, revenue }]) => ({
+      plan,
+      count,
+      revenue,
+      avgValue: Math.round(revenue / count),
+    }))
+
+    setPackageAnalysisData(result)
+  })()
+}, [activeAnalytic])
+
+useEffect(() => {
+  if (activeAnalytic !== "city") return;
+
+  (async () => {
+    // 1. Fetch all leads (email, city, id)
+    const { data: leads, error: leadsError } = await supabase
+      .from("leads")
+      .select("id, email, city");
+
+    if (leadsError) {
+      console.error("Leads fetch error:", leadsError);
+      return;
+    }
+
+    // 2. Fetch all manual payments
+    const { data: manualPayments, error: manualError } = await supabase
+      .from("manual_payment")
+      .select("amount, payment_date, lead_id");
+
+    if (manualError) {
+      console.error("Manual payments fetch error:", manualError);
+      return;
+    }
+
+    // 3. Fetch all payment links
+    const { data: paymentLinks, error: linkError } = await supabase
+      .from("payment_links")
+      .select("amount, payment_date, lead_id");
+
+    if (linkError) {
+      console.error("Payment links fetch error:", linkError);
+      return;
+    }
+
+    const allPayments = [...(manualPayments || []), ...(paymentLinks || [])];
+
+    // 4. Create a lookup: lead_id → city
+    const leadCityMap: Record<string, string> = {};
+    for (const lead of leads || []) {
+      leadCityMap[lead.id] = lead.city || "Unknown";
+    }
+
+    // 5. Group payments by city
+    type Payment = { amount: number; date: string };
+    const cityMap: Record<
+      string,
+      { revenue: number; clients: Set<string>; payments: Payment[] }
+    > = {};
+
+    for (const payment of allPayments) {
+      const city = leadCityMap[payment.lead_id] || "Unknown";
+      if (!cityMap[city]) {
+        cityMap[city] = { revenue: 0, clients: new Set(), payments: [] };
+      }
+
+      cityMap[city].revenue += payment.amount;
+      cityMap[city].clients.add(payment.lead_id);
+      if (payment.payment_date) {
+        cityMap[city].payments.push({
+          amount: payment.amount,
+          date: payment.payment_date,
+        });
+      }
+    }
+
+    // 6. Calculate growth: current month vs last month revenue
+    const now = new Date();
+    const thisMonth = now.getMonth();
+    const thisYear = now.getFullYear();
+
+    const lastMonthDate = new Date(now);
+    lastMonthDate.setMonth(thisMonth - 1);
+    const lastMonth = lastMonthDate.getMonth();
+    const lastYear = lastMonthDate.getFullYear();
+
+    const cityData = Object.entries(cityMap).map(
+      ([city, { revenue, clients, payments }]) => {
+        const currentMonthRevenue = payments
+          .filter((p) => {
+            const d = new Date(p.date);
+            return d.getFullYear() === thisYear && d.getMonth() === thisMonth;
+          })
+          .reduce((sum, p) => sum + p.amount, 0);
+
+        const lastMonthRevenue = payments
+          .filter((p) => {
+            const d = new Date(p.date);
+            return d.getFullYear() === lastYear && d.getMonth() === lastMonth;
+          })
+          .reduce((sum, p) => sum + p.amount, 0);
+
+        const growth =
+          lastMonthRevenue > 0
+            ? +(((currentMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100).toFixed(1)
+            : currentMonthRevenue > 0
+            ? 100
+            : 0;
+
+        return {
+          city,
+          clients: clients.size,
+          revenue,
+          growth,
+        };
+      }
+    );
+
+    setCityAnalysisData(cityData);
+  })();
+}, [activeAnalytic]);
+
+useEffect(() => {
+  if (activeAnalytic !== "sales") return;
+
+  const fetchSales = async () => {
+    const formatMonth = (dateStr: string) => {
+      const d = new Date(dateStr);
+      return d.toLocaleString("default", { month: "short" });
+    };
+
+    // 1. Fetch all payments
+    const [manualRes, linkRes] = await Promise.all([
+      supabase.from("manual_payment").select("amount, plan, payment_date"),
+      supabase.from("payment_links").select("amount, plan, payment_date"),
+    ]);
+
+    if (manualRes.error || linkRes.error) {
+      console.error(manualRes.error || linkRes.error);
+      return;
+    }
+
+    const allPayments = [...(manualRes.data || []), ...(linkRes.data || [])];
+
+    // 2. Group by month and plan
+    const grouped: Record<string, Record<string, number>> = {};
+
+    for (const payment of allPayments) {
+      if (!payment.payment_date || !payment.plan) continue;
+      const month = formatMonth(payment.payment_date);
+      const plan = payment.plan;
+
+      if (!grouped[month]) grouped[month] = {};
+      if (!grouped[month][plan]) grouped[month][plan] = 0;
+
+      grouped[month][plan] += payment.amount;
+    }
+
+    // 3. Convert to chart-compatible format
+    const sortedMonths = Object.keys(grouped).sort(
+      (a, b) =>
+        new Date(`1 ${a} 2023`).getTime() - new Date(`1 ${b} 2023`).getTime()
+    );
+
+    const formatted = sortedMonths.map((month) => ({
+      month,
+      ...grouped[month],
+    }));
+
+    setSalesData(formatted);
+  };
+
+  fetchSales();
+}, [activeAnalytic]);
+
+
 
   const clearFilters = () => {
     setSearchTerm("")
@@ -764,7 +1011,7 @@ export function AnalyticsTab() {
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={400}>
-                <BarChart data={salesGraphData}>
+                <BarChart data={salesData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} />
                   <YAxis tick={{ fontSize: 12 }} />
@@ -787,197 +1034,189 @@ export function AnalyticsTab() {
         </div>
       )}
 
-      {activeAnalytic === "package" && (
-        <div className="space-y-6">
-          {/* Package Analysis */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="text-emerald-700">Package Distribution</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={packageAnalysis}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ package: pkg, count }) => `${pkg}: ${count}`}
-                      outerRadius={80}
-                      fill="#8884d8"
-                      dataKey="count"
-                    >
-                      {packageAnalysis.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
+{activeAnalytic === "package" && (
+  <div className="space-y-6">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Dynamic Package Distribution */}
+      <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+        <CardHeader>
+          <CardTitle className="text-emerald-700">Package Distribution</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={packageAnalysisData}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                label={({ plan, count }) => `${plan}: ${count}`}
+                outerRadius={80}
+                dataKey="count"
+              >
+                {packageAnalysisData.map((_, idx) => (
+                  <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
 
-            <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="text-emerald-700">Package Performance Metrics</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {packageAnalysis.map((pkg, index) => (
-                    <div key={index} className="p-4 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg">
-                      <div className="flex justify-between items-center mb-2">
-                        <h4 className="font-semibold text-slate-800">{pkg.package}</h4>
-                        <Badge className="bg-emerald-100 text-emerald-700">{pkg.retention}% retention</Badge>
-                      </div>
-                      <div className="grid grid-cols-3 gap-4 text-sm">
-                        <div>
-                          <span className="text-slate-600">Clients:</span>
-                          <div className="font-semibold">{pkg.count}</div>
-                        </div>
-                        <div>
-                          <span className="text-slate-600">Revenue:</span>
-                          <div className="font-semibold">${pkg.revenue.toLocaleString()}</div>
-                        </div>
-                        <div>
-                          <span className="text-slate-600">Avg Value:</span>
-                          <div className="font-semibold">${pkg.avgValue}</div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+      {/* Dynamic Package Performance Metrics */}
+      <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+        <CardHeader>
+          <CardTitle className="text-emerald-700">Package Performance Metrics</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {packageAnalysisData.map((pkg, i) => (
+              <div key={i} className="p-4 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg">
+                <div className="flex justify-between items-center mb-2">
+                  <h4 className="font-semibold text-slate-800">{pkg.plan}</h4>
                 </div>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      )}
-
-      {activeAnalytic === "city" && (
-        <div className="space-y-6">
-          {/* City Analysis */}
-          <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-            <CardHeader>
-              <CardTitle className="text-emerald-700">City-wise Performance Analysis</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={400}>
-                <ComposedChart data={cityAnalysis}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="city" tick={{ fontSize: 12 }} />
-                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
-                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
-                  <Tooltip />
-                  <Bar yAxisId="left" dataKey="clients" fill="#10b981" name="Clients" />
-                  <Line
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="growth"
-                    stroke="#f59e0b"
-                    strokeWidth={3}
-                    name="Growth %"
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          {/* City Performance Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {cityAnalysis.slice(0, 3).map((city, index) => (
-              <Card key={index} className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-emerald-700 flex items-center gap-2">
-                    <MapPin className="h-4 w-4" />
-                    {city.city}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Clients:</span>
-                      <span className="font-semibold">{city.clients}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Revenue:</span>
-                      <span className="font-semibold">${city.revenue.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Growth:</span>
-                      <Badge className="bg-emerald-100 text-emerald-700">+{city.growth}%</Badge>
-                    </div>
+                <div className="grid grid-cols-3 gap-4 text-sm">
+                  <div>
+                    <span className="text-slate-600">Clients:</span>
+                    <div className="font-semibold">{pkg.count}</div>
                   </div>
-                </CardContent>
-              </Card>
+                  <div>
+                    <span className="text-slate-600">Revenue:</span>
+                    <div className="font-semibold">${pkg.revenue.toLocaleString()}</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-600">Avg Value:</span>
+                    <div className="font-semibold">${pkg.avgValue}</div>
+                  </div>
+                </div>
+              </div>
             ))}
           </div>
-        </div>
-      )}
+        </CardContent>
+      </Card>
+    </div>
+  </div>
+)}
 
-      {activeAnalytic === "gender" && (
-        <div className="space-y-6">
-          {/* Gender Analysis */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="text-emerald-700">Gender Distribution</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={genderAnalysis}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ gender, percentage }) => `${gender}: ${percentage}%`}
-                      outerRadius={80}
-                      fill="#8884d8"
-                      dataKey="count"
-                    >
-                      {genderAnalysis.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
 
-            <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="text-emerald-700">Gender-wise Metrics</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-6">
-                  {genderAnalysis.map((gender, index) => (
-                    <div key={index} className="p-4 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg">
-                      <div className="flex justify-between items-center mb-3">
-                        <h4 className="font-semibold text-slate-800 flex items-center gap-2">
-                          <Users className="h-4 w-4" />
-                          {gender.gender}
-                        </h4>
-                        <Badge className="bg-emerald-100 text-emerald-700">{gender.percentage}%</Badge>
-                      </div>
-                      <div className="grid grid-cols-2 gap-4 text-sm">
-                        <div>
-                          <span className="text-slate-600">Count:</span>
-                          <div className="font-semibold text-lg">{gender.count}</div>
-                        </div>
-                        <div>
-                          <span className="text-slate-600">Revenue:</span>
-                          <div className="font-semibold text-lg">${gender.revenue.toLocaleString()}</div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+{activeAnalytic === "city" && (
+  <div className="space-y-6">
+    {/* Chart */}
+    <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+      <CardHeader>
+        <CardTitle className="text-emerald-700">City-wise Performance Analysis</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={400}>
+          <ComposedChart data={cityAnalysisData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="city" tick={{ fontSize: 12 }} />
+            <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
+            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
+            <Tooltip />
+            <Bar yAxisId="left" dataKey="clients" fill="#10b981" name="Clients" />
+            <Line
+              yAxisId="right"
+              type="monotone"
+              dataKey="growth"
+              stroke="#f59e0b"
+              strokeWidth={3}
+              name="Growth %"
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+
+    {/* Top-3 City Cards */}
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {cityAnalysisData.slice(0, 3).map(({ city, clients, revenue, growth }) => (
+        <Card key={city} className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-emerald-700 flex items-center gap-2">
+              <MapPin className="h-4 w-4" />
+              {city}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <div className="flex justify-between">
+                <span className="text-slate-600">Clients:</span>
+                <span className="font-semibold">{clients}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Revenue:</span>
+                <span className="font-semibold">${revenue.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Growth:</span>
+                <Badge className="bg-emerald-100 text-emerald-700">+{growth}%</Badge>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  </div>
+)}
+
+
+{activeAnalytic === 'gender' && (
+  <div className="space-y-6">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* — the dynamic pie chart — */}
+      <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+        <CardHeader>
+          <CardTitle className="text-emerald-700">Gender Distribution</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={genderAnalysisData}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                label={({ gender, percentage }) => `${gender}: ${percentage}%`}
+                outerRadius={80}
+                dataKey="count"
+              >
+                {genderAnalysisData.map((_, idx) => (
+                  <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip />
+            </PieChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      {/* — the dynamic metric cards — */}
+      <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+        <CardHeader>
+          <CardTitle className="text-emerald-700">Gender-wise Metrics</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {genderAnalysisData.map((g, i) => (
+              <div key={i} className="p-4 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-lg">
+                <div className="flex justify-between items-center mb-2">
+                  <h4 className="font-semibold text-slate-800">{g.gender}</h4>
+                  <Badge className="bg-emerald-100 text-emerald-700">{g.percentage}%</Badge>
                 </div>
-              </CardContent>
-            </Card>
+                <div className="text-sm">
+                  <span className="text-slate-600">Count:</span>{' '}
+                  <span className="font-semibold">{g.count}</span>
+                </div>
+              </div>
+            ))}
           </div>
-        </div>
-      )}
+        </CardContent>
+      </Card>
+    </div>
+  </div>
+)}
 
       {activeAnalytic === "source" && (
         <div className="space-y-6">

@@ -681,7 +681,7 @@ export default function LeadAssignmentTab() {
   // Fixed handleViewLeadInfo function with proper routing
   const handleViewLeadInfo = (leadId: string) => {
     // Navigate to lead info page with the lead ID as a query parameter
-    const url = `/lead-information?leadId=${leadId}&tab=lead-info`
+    const url = `/lead-information?tab=lead-information&leadId=${leadId}&tab=lead-info`
     router.push(url)
   }
 
