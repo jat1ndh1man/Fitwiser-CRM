@@ -99,184 +99,184 @@ export function ClientsTab() {
     fetchClients()
   }, [])
 
-  const fetchClients = async () => {
-    try {
-      setLoading(true)
-      setError(null)
+const fetchClients = async () => {
+  try {
+    setLoading(true)
+    setError(null)
 
-      // 1. Fetch users with client role
-      const { data: userData, error: userErr } = await supabase
-        .from('users')
-        .select(`
-          id,
-          email,
-          phone,
-          first_name,
-          last_name,
-          created_at,
-          is_active
-        `)
-        .eq('role_id', STATIC_ROLE_ID)
-        .order('created_at', { ascending: false })
+    // 1. Fetch users with client role
+    let { data: userData, error: userErr } = await supabase
+      .from('users')
+      .select(`
+        id,
+        email,
+        phone,
+        first_name,
+        last_name,
+        created_at,
+        is_active
+      `)
+      .eq('role_id', STATIC_ROLE_ID)
+      .order('created_at', { ascending: false })
 
-      if (userErr) {
-        console.error('User fetch error:', userErr)
-        throw userErr
-      }
-
-      if (!userData || userData.length === 0) {
-        setClients([])
-        setLoading(false)
-        return
-      }
-
-      const userIds = userData.map(u => u.id)
-
-      // 2. Fetch payment data in bulk
-      const [manualPaymentsResult, paymentLinksResult] = await Promise.all([
-        supabase
-          .from('manual_payment')
-          .select('user_id, amount, plan_expiry, payment_date')
-          .in('user_id', userIds)
-          .eq('status', 'completed'),
-        supabase
-          .from('payment_links')
-          .select('user_id, amount, plan_expiry, created_at')
-          .in('user_id', userIds)
-          .eq('status', 'completed')
-      ])
-
-      // 3. Fetch coach assignments and workout assignments
-      const [coachAssignments, workoutAssignments] = await Promise.all([
-        supabase
-          .from('client_coach_relationships')
-          .select('client_id, coach_id')
-          .in('client_id', userIds)
-          .eq('status', 'active'),
-        supabase
-          .from('workout_assignments')
-          .select('user_id')
-          .in('user_id', userIds)
-      ])
-
-      // 4. Fetch coach details
-      const coachIds = (coachAssignments.data || []).map(ca => ca.coach_id).filter(Boolean)
-      const uniqueCoachIds = [...new Set(coachIds)]
-      
-      let coachesData: Coach[] = []
-      if (uniqueCoachIds.length > 0) {
-        const { data: coaches, error: coachErr } = await supabase
-          .from('users')
-          .select('id, first_name, last_name, email')
-          .in('id', uniqueCoachIds)
-
-        if (coachErr) {
-          console.error('Coach fetch error:', coachErr)
-        } else {
-          coachesData = coaches || []
-        }
-      }
-
-      // Process payment data
-      const paymentTotalsMap = new Map<string, number>()
-      const planExpiryMap = new Map<string, Date>()
-
-      // Process manual payments
-      const manualPayments = manualPaymentsResult.data || []
-      manualPayments.forEach(payment => {
-        const userId = payment.user_id
-        const amount = payment.amount || 0
-        
-        // Add to total
-        paymentTotalsMap.set(userId, (paymentTotalsMap.get(userId) || 0) + amount)
-        
-        // Update expiry date if newer
-        if (payment.plan_expiry) {
-          const expiryDate = new Date(payment.plan_expiry)
-          const currentExpiry = planExpiryMap.get(userId)
-          if (!currentExpiry || expiryDate > currentExpiry) {
-            planExpiryMap.set(userId, expiryDate)
-          }
-        }
-      })
-
-      // Process payment links
-      const paymentLinks = paymentLinksResult.data || []
-      paymentLinks.forEach(payment => {
-        const userId = payment.user_id
-        const amount = payment.amount || 0
-        
-        // Add to total
-        paymentTotalsMap.set(userId, (paymentTotalsMap.get(userId) || 0) + amount)
-        
-        // Update expiry date if newer
-        if (payment.plan_expiry) {
-          const expiryDate = new Date(payment.plan_expiry)
-          const currentExpiry = planExpiryMap.get(userId)
-          if (!currentExpiry || expiryDate > currentExpiry) {
-            planExpiryMap.set(userId, expiryDate)
-          }
-        }
-      })
-
-      // Create lookup maps
-      const coachAssignmentMap = new Map<string, string>()
-      ;(coachAssignments.data || []).forEach(ca => {
-        coachAssignmentMap.set(ca.client_id, ca.coach_id)
-      })
-
-      const coachesMap = new Map<string, Coach>()
-      coachesData.forEach(coach => {
-        coachesMap.set(coach.id, coach)
-      })
-
-      const hasWorkoutAssignment = new Set(
-        (workoutAssignments.data || []).map(w => w.user_id)
-      )
-
-      // Process clients
-      const processedClients: Client[] = userData.map(user => {
-        const totalAmountPaid = paymentTotalsMap.get(user.id) || 0
-        const latestExpiryDate = planExpiryMap.get(user.id)
-        
-        // Determine status
-        let status: 'Active' | 'Inactive' | 'Expired' = 'Inactive'
-        if (user.is_active) {
-          if (latestExpiryDate) {
-            status = latestExpiryDate > new Date() ? 'Active' : 'Expired'
-          } else {
-            status = 'Inactive'
-          }
-        }
-
-        // Get assigned coach
-        const coachId = coachAssignmentMap.get(user.id)
-        const assignedCoach = coachId ? coachesMap.get(coachId) || null : null
-
-        return {
-          id: user.id,
-          first_name: user.first_name || '',
-          last_name: user.last_name || '',
-          email: user.email || '',
-          phone: user.phone || '',
-          created_at: user.created_at,
-          is_active: user.is_active,
-          totalAmountPaid,
-          latestExpiryDate: latestExpiryDate ? latestExpiryDate.toISOString().split('T')[0] : null,
-          status,
-          assignedCoach,
-          hasWorkoutAssignment: hasWorkoutAssignment.has(user.id)
-        }
-      })
-
-      setClients(processedClients)
-    } catch (err) {
-      console.error('Error fetching clients:', err)
-      setError('Failed to fetch client data')
-    } finally {
-      setLoading(false)
+    if (userErr) {
+      console.error('User fetch error:', userErr)
+      throw userErr
     }
+
+    // ─────── Executive-only filter ───────
+    const { id: currentUserId, role_id: currentRoleId } = JSON.parse(
+      localStorage.getItem('userProfile') || '{}'
+    )
+    const EXECUTIVE_ROLE = '1fe1759c-dc14-4933-947a-c240c046bcde'
+
+    if (currentRoleId === EXECUTIVE_ROLE) {
+      // a) get all lead_ids assigned to this Executive
+      const { data: leadAssignments, error: laErr } = await supabase
+        .from('lead_assignments')
+        .select('lead_id')
+        .eq('assigned_to', currentUserId)
+      if (laErr) {
+        console.error('Lead‐assignments fetch error:', laErr)
+        throw laErr
+      }
+
+      const leadIds = leadAssignments.map((a) => a.lead_id)
+      if (leadIds.length) {
+        // b) fetch those leads to pull their emails
+        const { data: leadsData, error: lErr } = await supabase
+          .from('leads')
+          .select('email')
+          .in('id', leadIds)
+        if (lErr) {
+          console.error('Leads fetch error:', lErr)
+          throw lErr
+        }
+
+        const assignedEmails = leadsData.map((l) => l.email)
+        // c) filter userData down to only those emails
+        userData = userData.filter((u) =>
+          assignedEmails.includes(u.email)
+        )
+      } else {
+        // no assignments → show no one
+        userData = []
+      }
+    }
+    // ────────────────────────────────────────
+
+    // nothing to do if no clients
+    if (!userData || userData.length === 0) {
+      setClients([])
+      setLoading(false)
+      return
+    }
+
+    // pull all matching user IDs
+    const userIds = userData.map(u => u.id)
+
+    // 2. Fetch payment data in bulk
+    const [manualPaymentsResult, paymentLinksResult] = await Promise.all([
+      supabase
+        .from('manual_payment')
+        .select('user_id, amount, plan_expiry, payment_date')
+        .in('user_id', userIds)
+        .eq('status', 'completed'),
+      supabase
+        .from('payment_links')
+        .select('user_id, amount, plan_expiry, created_at')
+        .in('user_id', userIds)
+        .eq('status', 'completed')
+    ])
+
+    // 3. Fetch coach & workout assignments
+    const [coachAssignments, workoutAssignments] = await Promise.all([
+      supabase
+        .from('client_coach_relationships')
+        .select('client_id, coach_id')
+        .in('client_id', userIds)
+        .eq('status', 'active'),
+      supabase
+        .from('workout_assignments')
+        .select('user_id')
+        .in('user_id', userIds)
+    ])
+
+    // 4. Fetch coach details
+    const coachIds = (coachAssignments.data || []).map(c => c.coach_id).filter(Boolean)
+    const uniqueCoachIds = Array.from(new Set(coachIds))
+    let coachesData: Coach[] = []
+    if (uniqueCoachIds.length) {
+      const { data: coaches, error: coachErr } = await supabase
+        .from('users')
+        .select('id, first_name, last_name, email')
+        .in('id', uniqueCoachIds)
+      if (coachErr) {
+        console.error('Coach fetch error:', coachErr)
+      } else {
+        coachesData = coaches || []
+      }
+    }
+
+    // Process payments into totals & expiry maps
+    const paymentTotalsMap = new Map<string, number>()
+    const planExpiryMap    = new Map<string, Date>()
+    ;[...(manualPaymentsResult.data || []), ...(paymentLinksResult.data || [])].forEach(pmt => {
+      const uid = pmt.user_id
+      const amt = pmt.amount || 0
+      paymentTotalsMap.set(uid, (paymentTotalsMap.get(uid) || 0) + amt)
+      if (pmt.plan_expiry) {
+        const d = new Date(pmt.plan_expiry)
+        const cur = planExpiryMap.get(uid)
+        if (!cur || d > cur) planExpiryMap.set(uid, d)
+      }
+    })
+
+    // Build lookup maps
+    const coachAssignmentMap = new Map(
+      (coachAssignments.data || []).map(c => [c.client_id, c.coach_id] as const)
+    )
+    const coachesMap = new Map(coachesData.map(c => [c.id, c] as const))
+    const hasWorkout = new Set((workoutAssignments.data || []).map(w => w.user_id))
+
+    // Stitch together final Client[]
+    const processed: Client[] = userData.map(user => {
+      const totalPaid = paymentTotalsMap.get(user.id) || 0
+      const expiry    = planExpiryMap.get(user.id)
+      let   status: Client['status'] = 'Inactive'
+      if (user.is_active) {
+        status = expiry
+          ? expiry > new Date() ? 'Active' : 'Expired'
+          : 'Inactive'
+      }
+      const coachId = coachAssignmentMap.get(user.id)
+      const assignedCoach = coachId ? coachesMap.get(coachId) || null : null
+
+      return {
+        id: user.id,
+        first_name: user.first_name || '',
+        last_name:  user.last_name  || '',
+        email:      user.email      || '',
+        phone:      user.phone      || '',
+        created_at: user.created_at,
+        is_active:  user.is_active,
+        totalAmountPaid:  totalPaid,
+        latestExpiryDate: expiry?.toISOString().split('T')[0] || null,
+        status,
+        assignedCoach,
+        hasWorkoutAssignment: hasWorkout.has(user.id)
+      }
+    })
+
+    setClients(processed)
+  } catch (err) {
+    console.error('Error fetching clients:', err)
+    setError('Failed to fetch client data')
+  } finally {
+    setLoading(false)
   }
+}
+
 
   // Sorting handlers
   const handleSort = (field: SortField) => {

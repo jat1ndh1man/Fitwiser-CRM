@@ -140,68 +140,115 @@ export function DashboardTab() {
   const [recentActivity, setRecentActivity] = useState<any[]>([])
 
   // Fetch data from Supabase
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true)
-        
-        // Fetch leads
-        const { data: leadsData, error: leadsError } = await supabase
-          .from('leads')
-          .select('*')
-          .order('created_at', { ascending: false })
+useEffect(() => {
+  const fetchData = async () => {
+    try {
+      setLoading(true)
 
-        if (leadsError) throw leadsError
-        setAllLeads(leadsData || [])
-        setFilteredLeads(leadsData || []) // Initially show all leads
+      //
+      // 1) Get the current user
+      //
+      const {
+        data: { user: currentUser },
+        error: userError
+      } = await supabase.auth.getUser()
+      if (userError || !currentUser) throw userError || new Error('Not signed in')
+      const currentUserId = currentUser.id
 
-        // Fetch payment links
-        const { data: paymentLinksData, error: paymentLinksError } = await supabase
-          .from('payment_links')
-          .select('*')
-          .order('created_at', { ascending: false })
+      //
+      // 2) Load their role_id
+      //
+      const { data: profile, error: profileError } = await supabase
+        .from('users')
+        .select('role_id')
+        .eq('id', currentUserId)
+        .single()
+      if (profileError || !profile) throw profileError || new Error('No profile row')
+      const roleId = profile.role_id
 
-        if (paymentLinksError) throw paymentLinksError
-        setPaymentLinks(paymentLinksData || [])
+      console.log('🏷️  currentUserId:', currentUserId, 'roleId:', roleId)
 
-        // Fetch manual payments
-        const { data: manualPaymentsData, error: manualPaymentsError } = await supabase
-          .from('manual_payment')
-          .select('*')
-          .order('created_at', { ascending: false })
+      //
+      // 3) Define full‑access roles
+      //
+      const FULL_ACCESS_ROLES = [
+        'b00060fe-175a-459b-8f72-957055ee8c55', // Superadmin
+        '46e786df-0272-4f22-aec2-56d2a517fa9d', // Admin
+        '11b93954-9a56-4ea5-a02c-15b731ee9dfb'  // Sales manager
+      ]
 
-        if (manualPaymentsError) throw manualPaymentsError
-        setManualPayments(manualPaymentsData || [])
+      //
+      // 4) Build the leads query
+      //
+      let leadsQuery = supabase
+        .from('leads')
+        .select('*')
+        .order('created_at', { ascending: false })
 
-       // Fetch assigned leads count
- const { data: assignedLeadsData, error: assignedLeadsError } = await supabase
-   .from('leads')
-   .select('id')
-   .eq('status', 'assigned')
+      if (!FULL_ACCESS_ROLES.includes(roleId)) {
+        // Executive → restrict to their assigned leads
+        const { data: assignments = [], error: assignError } = await supabase
+          .from('lead_assignments')
+          .select('lead_id')
+          .eq('assigned_to', currentUserId)
+        if (assignError) throw assignError
 
- if (assignedLeadsError) throw assignedLeadsError
- setTotalClients(assignedLeadsData?.length || 0)
-
-        // Calculate total revenue
-        const completedPaymentLinks = paymentLinksData?.filter(p => p.status === 'completed') || []
-        const completedManualPayments = manualPaymentsData?.filter(p => p.status === 'completed') || []
-        
-        const revenue = [
-          ...completedPaymentLinks,
-          ...completedManualPayments
-        ].reduce((sum, payment) => sum + (payment.amount || 0), 0)
-        
-        setTotalRevenue(revenue)
-
-      } catch (error) {
-        console.error('Error fetching data:', error)
-      } finally {
-        setLoading(false)
+        const assignedIds = assignments.map(a => a.lead_id)
+        if (assignedIds.length > 0) {
+          leadsQuery = leadsQuery.in('id', assignedIds)
+        } else {
+          // no assignments → force an empty result set
+          leadsQuery = leadsQuery.in('id', ['00000000-0000-0000-0000-000000000000'])
+        }
       }
-    }
 
-    fetchData()
-  }, [])
+      const { data: leadsData = [], error: leadsError } = await leadsQuery
+      if (leadsError) throw leadsError
+      setAllLeads(leadsData)
+      setFilteredLeads(leadsData)
+
+      //
+      // 5) Now fetch payments (unchanged)
+      //
+      const [{ data: paymentLinksData = [], error: plError },
+             { data: manualPaymentsData = [], error: mpError }] = await Promise.all([
+        supabase.from('payment_links').select('*').order('created_at', { ascending: false }),
+        supabase.from('manual_payment') .select('*').order('created_at', { ascending: false })
+      ])
+      if (plError) throw plError
+      if (mpError) throw mpError
+
+      setPaymentLinks(paymentLinksData)
+      setManualPayments(manualPaymentsData)
+
+      //
+      // 6) Total clients & revenue (unchanged)
+      //
+      const completedLinks = paymentLinksData.filter(p => p.status === 'completed')
+      const completedManual = manualPaymentsData.filter(p => p.status === 'completed')
+    const leadIdsSet = new Set(leadsData.map(l => l.id))
+
+// only count payments for those leads
+const completedLinksForLeads = paymentLinksData
+  .filter(p => p.status === 'completed' && leadIdsSet.has(p.user_id))
+const completedManualForLeads = manualPaymentsData
+  .filter(p => p.status === 'completed' && leadIdsSet.has(p.user_id))
+
+setTotalClients(leadsData.length)         // total = all fetched leads
+setTotalRevenue(
+  [...completedLinksForLeads, ...completedManualForLeads]
+    .reduce((sum, p) => sum + (p.amount||0), 0)
+)
+    } catch (error) {
+      console.error('Error fetching data:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  fetchData()
+}, [])
+
 
   // Apply local filters whenever filter parameters change
   useEffect(() => {

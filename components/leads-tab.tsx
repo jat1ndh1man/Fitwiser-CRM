@@ -118,7 +118,10 @@ export function LeadsTab() {
   const [editingLead, setEditingLead] = useState<Lead | null>(null)
   const [selectedDate, setSelectedDate] = useState<Date>()
   const [isSubmitting, setIsSubmitting] = useState(false)
-  
+  const SUPERADMIN_ROLE    = 'b00060fe-175a-459b-8f72-957055ee8c55'
+  const ADMIN_ROLE         = '46e786df-0272-4f22-aec2-56d2a517fa9d'
+  const SALES_MANAGER_ROLE = '11b93954-9a56-4ea5-a02c-15b731ee9dfb'
+  const EXECUTIVE_ROLE     = '1fe1759c-dc14-4933-947a-c240c046bcde'
   // Sorting states
   const [sortField, setSortField] = useState<SortField | null>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>(null)
@@ -259,25 +262,62 @@ export function LeadsTab() {
   }, [statusFilter, sourceFilter, counselorFilter, priorityFilter, searchTerm, dateRange])
 
   // Fetch leads from Supabase
-  const fetchLeads = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      
-      const { data, error } = await supabase
-        .from('leads')
-        .select('*')
-        .order('created_at', { ascending: false })
-      
-      if (error) throw error
-      
-      setLeads(data || [])
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch leads')
-    } finally {
-      setLoading(false)
+
+const fetchLeads = async () => {
+  setLoading(true)
+  setError(null)
+
+  try {
+    // — get current user (for `user.id`)
+    const {
+      data: { user },
+      error: authError
+    } = await supabase.auth.getUser()
+    if (authError || !user) throw authError ?? new Error('No user session')
+
+    // — read roleId from localStorage instead of querying it
+    const rawProfile = localStorage.getItem('userProfile')
+    const roleId     = rawProfile ? JSON.parse(rawProfile).role_id : null
+
+    // — base query: everyone sees this unless filtered below
+    let query = supabase.from<Lead>('leads').select('*')
+
+    // — only executives get filtered down to their assignments
+    if (roleId === EXECUTIVE_ROLE) {
+      // pull all assignment records for this exec
+      const { data: assignments, error: assignError } = await supabase
+        .from('lead_assignments')
+        .select('lead_id')
+        .eq('assigned_to', user.id)
+
+      if (assignError) throw assignError
+
+      // if none assigned, bail out with empty list
+      const leadIds = assignments.map(a => a.lead_id)
+      if (leadIds.length === 0) {
+        setLeads([])
+        return
+      }
+
+      // apply the filter
+      query = query.in('id', leadIds)
     }
+    // (Superadmin, Admin, Sales Manager all just run the unfiltered query)
+
+    // — run the (possibly filtered) query
+    const { data, error: leadsError } = await query
+      .order('created_at', { ascending: false })
+
+    if (leadsError) throw leadsError
+    setLeads(data ?? [])
+  } catch (err: any) {
+    setError(err.message || 'Failed to fetch leads')
+  } finally {
+    setLoading(false)
   }
+}
+
+
 
   // Add new lead
   const addLead = async (leadData: NewLead) => {

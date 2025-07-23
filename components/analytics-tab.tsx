@@ -218,6 +218,68 @@ export function AnalyticsTab() {
   const [salesData, setSalesData] = useState<
   { month: string; [plan: string]: number }[]
 >([])
+const totalCount = packageAnalysisData.reduce(
+    (sum, pkg) => sum + pkg.count,
+    0
+  );
+
+  const [salesOverview, setSalesOverview] = useState<{
+  totalSales: number
+  growthRate: number
+  bestMonth: string
+  bestMonthRevenue: number
+  avgDealSize: number
+}>({
+  totalSales: 0,
+  growthRate: 0,
+  bestMonth: "",
+  bestMonthRevenue: 0,
+  avgDealSize: 0,
+})
+
+  const [liveMembers, setLiveMembers] = useState<{
+  total: number
+  active: number
+  inactive: number
+  locationWise: Array<{ location: string; active: number; inactive: number; total: number }>
+  packageDistribution: Array<{ package: string; total: number }>
+  ageCategoryWise: Array<{ category: string; active: number; inactive: number; total: number }>
+  professionWise: Array<{ profession: string; active: number; inactive: number; total: number }>
+}>({
+  total: 0,
+  active: 0,
+  inactive: 0,
+  locationWise: [],
+  packageDistribution: [],
+  ageCategoryWise: [],
+  professionWise: [],
+})
+
+const [conversionData, setConversionData] = useState<{
+  sourceWise: Array<{
+    source: string
+    leads: number
+    conversions: number
+    rate: number
+    revenue: number
+  }>
+  rmWise: Array<{
+    rm: string
+    leads: number
+    conversions: number
+    rate: number
+    revenue: number
+  }>
+}>({
+  sourceWise: [],
+  rmWise: [],
+})
+
+const [sourceAnalysisData, setSourceAnalysisData] = useState<
+  { source: string; count: number; revenue: number; conversion: number }[]
+>([])
+
+
 
 useEffect(() => {
   if (activeAnalytic !== 'gender') return
@@ -399,55 +461,375 @@ useEffect(() => {
 useEffect(() => {
   if (activeAnalytic !== "sales") return;
 
-  const fetchSales = async () => {
-    const formatMonth = (dateStr: string) => {
-      const d = new Date(dateStr);
-      return d.toLocaleString("default", { month: "short" });
-    };
-
-    // 1. Fetch all payments
+  ;(async () => {
+    // fetch payments
     const [manualRes, linkRes] = await Promise.all([
-      supabase.from("manual_payment").select("amount, plan, payment_date"),
-      supabase.from("payment_links").select("amount, plan, payment_date"),
+      supabase.from("manual_payment").select("plan, amount, payment_date"),
+      supabase.from("payment_links").select("plan, amount, payment_date"),
     ]);
-
     if (manualRes.error || linkRes.error) {
-      console.error(manualRes.error || linkRes.error);
+      console.error(manualRes.error ?? linkRes.error);
+      return;
+    }
+    const all = [...(manualRes.data ?? []), ...(linkRes.data ?? [])];
+
+    // group by month & plan
+    const monthOrder = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const grouped: Record<string, Record<string, number>> = {};
+    all.forEach(({ plan = "Unknown", amount, payment_date }) => {
+      const m = new Date(payment_date).toLocaleString("default", { month: "short" });
+      grouped[m] ??= {};
+      grouped[m][plan] = (grouped[m][plan] || 0) + amount;
+    });
+
+    // sort months
+    const sorted = Object.keys(grouped).sort(
+      (a, b) => monthOrder.indexOf(a) - monthOrder.indexOf(b)
+    );
+
+    // build chart data
+    const formatted = sorted.map((m) => ({ month: m, ...grouped[m] }));
+    setSalesData(formatted);
+
+    // --- now compute overview metrics ---
+    const totalSales = all.reduce((sum, p) => sum + p.amount, 0);
+
+    // revenue per month
+    const monthRevenues = sorted.map((m) =>
+      Object.values(grouped[m]).reduce((s, v) => s + v, 0)
+    );
+    const lastIdx = monthRevenues.length - 1;
+    const prevIdx = lastIdx > 0 ? lastIdx - 1 : lastIdx;
+
+    const growthRate =
+      prevIdx >= 0
+        ? parseFloat(
+            (
+              ((monthRevenues[lastIdx] - monthRevenues[prevIdx]) /
+                (monthRevenues[prevIdx] || 1)) *
+              100
+            ).toFixed(1)
+          )
+        : 0;
+
+    const bestIdx = monthRevenues.indexOf(Math.max(...monthRevenues));
+    const bestMonth = sorted[bestIdx] || "";
+    const bestMonthRevenue = monthRevenues[bestIdx] || 0;
+
+    const avgDealSize =
+      all.length > 0 ? parseFloat((totalSales / all.length).toFixed(0)) : 0;
+
+    setSalesOverview({
+      totalSales,
+      growthRate,
+      bestMonth,
+      bestMonthRevenue,
+      avgDealSize,
+    });
+  })();
+}, [activeAnalytic]);
+
+
+useEffect(() => {
+  if (activeAnalytic !== "livemembers") return
+
+  ;(async () => {
+    // 1) Pull users
+    const { data: users, error: uErr } = await supabase
+      .from("users")
+      .select("email, is_active, date_of_birth")
+    if (uErr) return console.error(uErr)
+
+    // 2) Pull leads (for city & profession)
+    const { data: leads, error: lErr } = await supabase
+      .from("leads")
+      .select("email, city, profession")
+    if (lErr) return console.error(lErr)
+
+    // 3) Pull plans
+    const [mRes, pRes] = await Promise.all([
+      supabase.from("manual_payment").select("plan"),
+      supabase.from("payment_links").select("plan"),
+    ])
+    if (mRes.error || pRes.error) return console.error(mRes.error || pRes.error)
+
+    // Build a lookup from lead-email → { city, profession }
+    const leadMap = Object.fromEntries(
+      (leads || []).map((r) => [r.email, { city: r.city || "Unknown", profession: r.profession || "Unknown" }])
+    )
+
+    // 4) Package distribution (just total count per plan)
+    const allPlans = [...(mRes.data || []), ...(pRes.data || [])].map((r) => r.plan || "Unknown")
+    const pkgCounts = allPlans.reduce<Record<string, number>>((acc, pkg) => {
+      acc[pkg] = (acc[pkg] ?? 0) + 1
+      return acc
+    }, {})
+    const packageDistribution = Object.entries(pkgCounts).map(([pkg, total]) => ({ package: pkg, total }))
+
+    // 5) Build member array with computed fields
+    type Member = {
+      email: string
+      is_active: boolean
+      age: number
+      city: string
+      profession: string
+    }
+    const members: Member[] = (users || []).map((u) => {
+      const dob = new Date(u.date_of_birth!)
+      const age = Math.floor((Date.now() - dob.getTime()) / (1000 * 60 * 60 * 24 * 365.25))
+      const info = leadMap[u.email] || { city: "Unknown", profession: "Unknown" }
+      return { email: u.email, is_active: u.is_active, age, city: info.city, profession: info.profession }
+    })
+
+    // 6) Totals
+    const total = members.length
+    const active = members.filter((m) => m.is_active).length
+    const inactive = total - active
+
+    // 7) Location-wise aggregation
+    const locAgg = members.reduce<
+      Record<string, { active: number; inactive: number; total: number }>
+    >((acc, m) => {
+      acc[m.city] = acc[m.city] || { active: 0, inactive: 0, total: 0 }
+      acc[m.city].total++
+      m.is_active ? acc[m.city].active++ : acc[m.city].inactive++
+      return acc
+    }, {})
+    const locationWise = Object.entries(locAgg).map(([location, stats]) => ({
+      location,
+      ...stats,
+    }))
+
+    // 8) Age-category aggregation
+    const bins: Record<string, [number, number]> = {
+      "18-25": [18, 25],
+      "26-35": [26, 35],
+      "36-45": [36, 45],
+      "46-55": [46, 55],
+      "55+": [56, 200],
+    }
+    const ageAgg: Record<string, { active: number; inactive: number; total: number }> = {}
+    members.forEach((m) => {
+      const cat =
+        Object.entries(bins).find(([_, [min, max]]) => m.age >= min && m.age <= max)?.[0] || "Unknown"
+      ageAgg[cat] = ageAgg[cat] || { active: 0, inactive: 0, total: 0 }
+      ageAgg[cat].total++
+      m.is_active ? ageAgg[cat].active++ : ageAgg[cat].inactive++
+    })
+    const ageCategoryWise = Object.entries(ageAgg).map(([category, stats]) => ({
+      category,
+      ...stats,
+    }))
+
+    // 9) Profession-wise aggregation
+    const profAgg: Record<string, { active: number; inactive: number; total: number }> = {}
+    members.forEach((m) => {
+      profAgg[m.profession] = profAgg[m.profession] || { active: 0, inactive: 0, total: 0 }
+      profAgg[m.profession].total++
+      m.is_active ? profAgg[m.profession].active++ : profAgg[m.profession].inactive++
+    })
+    const professionWise = Object.entries(profAgg).map(([profession, stats]) => ({
+      profession,
+      ...stats,
+    }))
+
+    // 10) Update state
+    setLiveMembers({
+      total,
+      active,
+      inactive,
+      locationWise,
+      packageDistribution,
+      ageCategoryWise,
+      professionWise,
+    })
+  })()
+}, [activeAnalytic])
+
+useEffect(() => {
+  if (activeAnalytic !== "conversion") return;
+
+  (async () => {
+    // 1) Fetch all leads
+    const { data: leads, error: leadsErr } = await supabase
+      .from("leads")
+      .select("id, email, source");
+    if (leadsErr) {
+      console.error("Leads error:", leadsErr);
       return;
     }
 
-    const allPayments = [...(manualRes.data || []), ...(linkRes.data || [])];
-
-    // 2. Group by month and plan
-    const grouped: Record<string, Record<string, number>> = {};
-
-    for (const payment of allPayments) {
-      if (!payment.payment_date || !payment.plan) continue;
-      const month = formatMonth(payment.payment_date);
-      const plan = payment.plan;
-
-      if (!grouped[month]) grouped[month] = {};
-      if (!grouped[month][plan]) grouped[month][plan] = 0;
-
-      grouped[month][plan] += payment.amount;
+    // 2) Fetch all lead assignments
+    const { data: assignments, error: assignErr } = await supabase
+      .from("lead_assignments")
+      .select("lead_id, assigned_to");
+    if (assignErr) {
+      console.error("Assignments error:", assignErr);
+      return;
     }
 
-    // 3. Convert to chart-compatible format
-    const sortedMonths = Object.keys(grouped).sort(
-      (a, b) =>
-        new Date(`1 ${a} 2023`).getTime() - new Date(`1 ${b} 2023`).getTime()
-    );
+    // 3) Map each lead → RM user ID
+    const leadToRmId: Record<string, string> = {};
+    assignments.forEach(({ lead_id, assigned_to }) => {
+      leadToRmId[lead_id] = assigned_to;
+    });
 
-    const formatted = sortedMonths.map((month) => ({
-      month,
-      ...grouped[month],
+    // 4) Fetch RM user details (first+last name)
+    const rmIds = Array.from(new Set(assignments.map(a => a.assigned_to))).filter(Boolean);
+    const userMap: Record<string, string> = {};
+    if (rmIds.length) {
+      const { data: rms, error: rmsErr } = await supabase
+        .from("users")
+        .select("id, first_name, last_name")
+        .in("id", rmIds);
+      if (rmsErr) console.error("RM fetch error:", rmsErr);
+      else rms.forEach(u => {
+        userMap[u.id] = `${u.first_name} ${u.last_name}`;
+      });
+    }
+
+    // 5) Fetch converted users (by email)
+    const { data: users, error: usersErr } = await supabase
+      .from("users")
+      .select("email");
+    if (usersErr) {
+      console.error("Users error:", usersErr);
+      return;
+    }
+    const convertedEmails = new Set(users.map(u => u.email));
+
+    // 6) Fetch payments
+    const [mRes, lRes] = await Promise.all([
+      supabase.from("manual_payment").select("amount, lead_id"),
+      supabase.from("payment_links").select("amount, lead_id"),
+    ]);
+    if (mRes.error || lRes.error) {
+      console.error("Payments error:", mRes.error ?? lRes.error);
+      return;
+    }
+    const allPayments = [...(mRes.data ?? []), ...(lRes.data ?? [])];
+
+    // 7) Build revenue‐by‐lead map
+    const revByLead: Record<string, number> = {};
+    allPayments.forEach(p => {
+      revByLead[p.lead_id] = (revByLead[p.lead_id] ?? 0) + p.amount;
+    });
+
+    // 8) Aggregate by source & by RM
+    const srcAgg: Record<string, { leads: number; conversions: number; revenue: number }> = {};
+    const rmAgg: Record<string, { leads: number; conversions: number; revenue: number }> = {};
+
+    leads.forEach(lead => {
+      const { id, email, source = "Unknown" } = lead;
+      // Source‐wise
+      srcAgg[source] ??= { leads: 0, conversions: 0, revenue: 0 };
+      srcAgg[source].leads++;
+      if (convertedEmails.has(email)) {
+        srcAgg[source].conversions++;
+        srcAgg[source].revenue += revByLead[id] ?? 0;
+      }
+
+      // RM‐wise
+      const rmId = leadToRmId[id];
+      const rmName = userMap[rmId] || "Unassigned";
+      rmAgg[rmName] ??= { leads: 0, conversions: 0, revenue: 0 };
+      rmAgg[rmName].leads++;
+      if (convertedEmails.has(email)) {
+        rmAgg[rmName].conversions++;
+        rmAgg[rmName].revenue += revByLead[id] ?? 0;
+      }
+    });
+
+    // 9) Format arrays with conversion % 
+    const sourceWise = Object.entries(srcAgg).map(([source, v]) => ({
+      source,
+      leads: v.leads,
+      conversions: v.conversions,
+      rate: parseFloat(((v.conversions / v.leads) * 100).toFixed(1)),
+      revenue: v.revenue,
+    }));
+    const rmWise = Object.entries(rmAgg).map(([rm, v]) => ({
+      rm,
+      leads: v.leads,
+      conversions: v.conversions,
+      rate: parseFloat(((v.conversions / v.leads) * 100).toFixed(1)),
+      revenue: v.revenue,
     }));
 
-    setSalesData(formatted);
-  };
-
-  fetchSales();
+    setConversionData({ sourceWise, rmWise });
+  })();
 }, [activeAnalytic]);
+
+
+useEffect(() => {
+  if (activeAnalytic !== "source") return;
+
+  (async () => {
+    // 1) Fetch all leads
+    const { data: leads, error: leadsErr } = await supabase
+      .from("leads")
+      .select("id, email, source");
+    if (leadsErr) {
+      console.error("Leads error:", leadsErr);
+      return;
+    }
+
+    // 2) Fetch all user emails (converted leads)
+    const { data: users, error: usersErr } = await supabase
+      .from("users")
+      .select("email");
+    if (usersErr) {
+      console.error("Users error:", usersErr);
+      return;
+    }
+    const converted = new Set(users.map((u) => u.email));
+
+    // 3) Fetch payments from both tables
+    const [mRes, lRes] = await Promise.all([
+      supabase.from("manual_payment").select("amount, lead_id"),
+      supabase.from("payment_links").select("amount, lead_id"),
+    ]);
+    if (mRes.error || lRes.error) {
+      console.error("Payments error:", mRes.error ?? lRes.error);
+      return;
+    }
+    const payments = [...(mRes.data || []), ...(lRes.data || [])];
+
+    // 4) Build revenue-by-lead map
+    const revByLead: Record<string, number> = {};
+    payments.forEach((p) => {
+      revByLead[p.lead_id] = (revByLead[p.lead_id] || 0) + p.amount;
+    });
+
+    // 5) Aggregate per source
+    const agg: Record<
+      string,
+      { count: number; revenue: number; conversions: number }
+    > = {};
+    leads.forEach((lead) => {
+      const src = lead.source || "Unknown";
+      if (!agg[src]) agg[src] = { count: 0, revenue: 0, conversions: 0 };
+      agg[src].count++;
+      if (converted.has(lead.email)) {
+        agg[src].conversions++;
+        agg[src].revenue += revByLead[lead.id] || 0;
+      }
+    });
+
+    // 6) Build array with conversion % 
+    const result = Object.entries(agg).map(
+      ([source, { count, revenue, conversions }]) => ({
+        source,
+        count,
+        revenue,
+        conversion: parseFloat(((conversions / count) * 100).toFixed(1)),
+      })
+    );
+
+    setSourceAnalysisData(result);
+  })();
+}, [activeAnalytic]);
+
 
 
 
@@ -464,17 +846,17 @@ useEffect(() => {
   const getAnalyticsData = () => {
     switch (activeAnalytic) {
       case "conversion":
-        return conversionAnalytics
+        return conversionData
       case "renewals":
         return renewalAnalytics
       case "sales":
-        return salesGraphData
+        return salesData
       case "package":
         return packageAnalysis
       case "city":
         return cityAnalysis
       case "gender":
-        return genderAnalysis
+        return genderAnalysisData
       case "source":
         return sourceAnalysis
       case "followup":
@@ -695,150 +1077,159 @@ useEffect(() => {
         </CardContent>
       </Card>
 
-      {/* Dynamic Analytics Content */}
-      {activeAnalytic === "conversion" && (
-        <div className="space-y-6">
-          {/* Conversion Analytics Header */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-emerald-700">Total Leads</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-emerald-600">538</div>
-                <p className="text-xs text-slate-600">All sources combined</p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50 to-cyan-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-blue-700">Total Conversions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-blue-600">236</div>
-                <p className="text-xs text-slate-600">Successful conversions</p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-purple-50 to-indigo-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-purple-700">Conversion Rate</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-purple-600">43.9%</div>
-                <p className="text-xs text-slate-600">Overall success rate</p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-orange-50 to-red-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-orange-700">Total Revenue</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-orange-600">$645K</div>
-                <p className="text-xs text-slate-600">From conversions</p>
-              </CardContent>
-            </Card>
+{activeAnalytic === "conversion" && (
+  <div className="space-y-6">
+    {/* Header Cards */}
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* Total Leads */}
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-emerald-700">
+            Total Leads
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-emerald-600">
+            {conversionData.sourceWise.reduce((sum, x) => sum + x.leads, 0)}
           </div>
+          <p className="text-xs text-slate-600">All sources combined</p>
+        </CardContent>
+      </Card>
 
-          {/* Source Wise Conversion */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="text-emerald-700">Source-wise Conversion</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={conversionAnalytics.sourceWise}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="source" tick={{ fontSize: 12 }} />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "rgba(255, 255, 255, 0.95)",
-                        border: "1px solid #10b981",
-                        borderRadius: "8px",
-                      }}
-                    />
-                    <Bar dataKey="leads" fill="#10b981" name="Leads" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="conversions" fill="#3b82f6" name="Conversions" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="text-emerald-700">RM-wise Performance</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <ComposedChart data={conversionAnalytics.rmWise}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="rm" tick={{ fontSize: 10 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
-                    <Tooltip />
-                    <Bar yAxisId="left" dataKey="conversions" fill="#10b981" name="Conversions" />
-                    <Line
-                      yAxisId="right"
-                      type="monotone"
-                      dataKey="rate"
-                      stroke="#f59e0b"
-                      strokeWidth={3}
-                      name="Conversion Rate %"
-                    />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
+      {/* Total Conversions */}
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50 to-cyan-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-blue-700">
+            Total Conversions
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-blue-600">
+            {conversionData.sourceWise.reduce((sum, x) => sum + x.conversions, 0)}
           </div>
+          <p className="text-xs text-slate-600">Successful conversions</p>
+        </CardContent>
+      </Card>
 
-          {/* Month Wise Conversion Trend */}
-          <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-            <CardHeader>
-              <CardTitle className="text-emerald-700">Monthly Conversion Trends</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={400}>
-                <AreaChart data={conversionAnalytics.monthWise}>
-                  <defs>
-                    <linearGradient id="colorLeads" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.8} />
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0.1} />
-                    </linearGradient>
-                    <linearGradient id="colorConversions" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
-                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.1} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} />
-                  <Tooltip />
-                  <Area
-                    type="monotone"
-                    dataKey="leads"
-                    stackId="1"
-                    stroke="#10b981"
-                    fillOpacity={1}
-                    fill="url(#colorLeads)"
-                    name="Leads"
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="conversions"
-                    stackId="2"
-                    stroke="#3b82f6"
-                    fillOpacity={1}
-                    fill="url(#colorConversions)"
-                    name="Conversions"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+      {/* Conversion Rate */}
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-purple-50 to-indigo-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-purple-700">
+            Conversion Rate
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-purple-600">
+            {(() => {
+              const leads = conversionData.sourceWise.reduce((s, i) => s + i.leads, 0)
+              const conv = conversionData.sourceWise.reduce(
+                (s, i) => s + i.conversions,
+                0
+              )
+              return leads ? `${((conv / leads) * 100).toFixed(1)}%` : "0%"
+            })()}
+          </div>
+          <p className="text-xs text-slate-600">Overall success rate</p>
+        </CardContent>
+      </Card>
 
-      {activeAnalytic === "renewals" && (
+      {/* Total Revenue */}
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-orange-50 to-red-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-orange-700">
+            Total Revenue
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-orange-600">
+            {`$${conversionData.sourceWise
+              .reduce((sum, x) => sum + x.revenue, 0)
+              .toLocaleString()}`}
+          </div>
+          <p className="text-xs text-slate-600">From conversions</p>
+        </CardContent>
+      </Card>
+    </div>
+
+    {/* Charts */}
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* Source-wise Conversion */}
+      <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+        <CardHeader>
+          <CardTitle className="text-emerald-700">Source-wise Conversion</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={conversionData.sourceWise}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis dataKey="source" tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "rgba(255,255,255,0.95)",
+                  border: "1px solid #10b981",
+                  borderRadius: 8,
+                }}
+              />
+              <Bar dataKey="leads" fill="#10b981" name="Leads" radius={[4, 4, 0, 0]} />
+              <Bar
+                dataKey="conversions"
+                fill="#3b82f6"
+                name="Conversions"
+                radius={[4, 4, 0, 0]}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      {/* RM-wise Performance */}
+      <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+        <CardHeader>
+          <CardTitle className="text-emerald-700">RM-wise Performance</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <ComposedChart data={conversionData.rmWise}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis dataKey="rm" tick={{ fontSize: 10 }} />
+              <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
+              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
+              <Tooltip />
+              <Bar yAxisId="left" dataKey="conversions" fill="#10b981" name="Conversions" />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="rate"
+                stroke="#f59e0b"
+                strokeWidth={3}
+                name="Conversion Rate %"
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+    </div>
+
+    {/* (Optional) Monthly trends — you can leave your existing static AreaChart here */}
+    <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+      <CardHeader>
+        <CardTitle className="text-emerald-700">Monthly Conversion Trends</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={400}>
+          <AreaChart data={conversionAnalytics.monthWise}>
+            {/* …your existing defs & <Area> layers… */}
+          </AreaChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  </div>
+)}
+  
+
+
+{activeAnalytic === "renewals" && (
         <div className="space-y-6">
           {/* Renewal Analytics Header */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -960,56 +1351,82 @@ useEffect(() => {
             </CardContent>
           </Card>
         </div>
-      )}
+)}
 
-      {activeAnalytic === "sales" && (
+{activeAnalytic === "sales" && (
         <div className="space-y-6">
           {/* Sales Overview */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-emerald-700">Total Sales</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-emerald-600">$2.1M</div>
-                <p className="text-xs text-slate-600">Last 6 months</p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50 to-cyan-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-blue-700">Growth Rate</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-blue-600">+18.5%</div>
-                <p className="text-xs text-slate-600">Month over month</p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-purple-50 to-indigo-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-purple-700">Best Month</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-purple-600">June</div>
-                <p className="text-xs text-slate-600">$410K revenue</p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-orange-50 to-red-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-orange-700">Avg Deal Size</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-orange-600">$2,650</div>
-                <p className="text-xs text-slate-600">Per customer</p>
-              </CardContent>
-            </Card>
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+  {/* Total Sales */}
+  <Card className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50">
+    <CardHeader className="pb-2">
+      <CardTitle className="text-sm font-medium text-emerald-700">
+        Total Sales
+      </CardTitle>
+    </CardHeader>
+    <CardContent>
+      <div className="text-2xl font-bold text-emerald-600">
+        ${salesOverview.totalSales.toLocaleString()}
+      </div>
+      <p className="text-xs text-slate-600">All time</p>
+    </CardContent>
+  </Card>
+
+  {/* Growth Rate */}
+  <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50 to-cyan-50">
+    <CardHeader className="pb-2">
+      <CardTitle className="text-sm font-medium text-blue-700">
+        Growth Rate
+      </CardTitle>
+    </CardHeader>
+    <CardContent>
+      <div className="text-2xl font-bold text-blue-600">
+        {salesOverview.growthRate > 0 ? "+" : ""}
+        {salesOverview.growthRate}%
+      </div>
+      <p className="text-xs text-slate-600">Month over month</p>
+    </CardContent>
+  </Card>
+
+  {/* Best Month */}
+  <Card className="border-0 shadow-lg bg-gradient-to-br from-purple-50 to-indigo-50">
+    <CardHeader className="pb-2">
+      <CardTitle className="text-sm font-medium text-purple-700">
+        Best Month
+      </CardTitle>
+    </CardHeader>
+    <CardContent>
+      <div className="text-2xl font-bold text-purple-600">
+        {salesOverview.bestMonth}
+      </div>
+      <p className="text-xs text-slate-600">
+        ${salesOverview.bestMonthRevenue.toLocaleString()} revenue
+      </p>
+    </CardContent>
+  </Card>
+
+  {/* Avg Deal Size */}
+  <Card className="border-0 shadow-lg bg-gradient-to-br from-orange-50 to-red-50">
+    <CardHeader className="pb-2">
+      <CardTitle className="text-sm font-medium text-orange-700">
+        Avg Deal Size
+      </CardTitle>
+    </CardHeader>
+    <CardContent>
+      <div className="text-2xl font-bold text-orange-600">
+        ${salesOverview.avgDealSize.toLocaleString()}
+      </div>
+      <p className="text-xs text-slate-600">Per transaction</p>
+    </CardContent>
+  </Card>
+</div>
 
           {/* Monthly Sales Graph */}
           <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
             <CardHeader>
               <CardTitle className="text-emerald-700">Monthly Sales by Package</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent >
               <ResponsiveContainer width="100%" height={400}>
                 <BarChart data={salesData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -1023,16 +1440,24 @@ useEffect(() => {
                       borderRadius: "8px",
                     }}
                   />
-                  <Bar dataKey="basic" stackId="a" fill="#10b981" name="Basic" />
-                  <Bar dataKey="standard" stackId="a" fill="#3b82f6" name="Standard" />
-                  <Bar dataKey="premium" stackId="a" fill="#f59e0b" name="Premium" />
-                  <Bar dataKey="enterprise" stackId="a" fill="#ef4444" name="Enterprise" />
+                 {(
+                     Object.keys(salesData[0] || {})
+                       .filter((k) => k !== "month")
+                   ).map((plan, idx) => (
+                     <Bar
+                       key={plan}
+                       dataKey={plan}
+                       stackId="a"
+                       fill={COLORS[idx % COLORS.length]}
+                       name={plan}
+                     />
+                   ))}
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
         </div>
-      )}
+)}
 
 {activeAnalytic === "package" && (
   <div className="space-y-6">
@@ -1042,11 +1467,12 @@ useEffect(() => {
         <CardHeader>
           <CardTitle className="text-emerald-700">Package Distribution</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className=" flex items-center justify-center ">
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
               <Pie
                 data={packageAnalysisData}
+                nameKey="plan"
                 cx="50%"
                 cy="50%"
                 labelLine={false}
@@ -1058,8 +1484,12 @@ useEffect(() => {
                   <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip />
-            </PieChart>
+              <Tooltip
+              formatter={(value, name) => [
+                `${((value / totalCount) * 100).toFixed(2)}%`,
+                name
+              ]}
+            />            </PieChart>
           </ResponsiveContainer>
         </CardContent>
       </Card>
@@ -1218,68 +1648,87 @@ useEffect(() => {
   </div>
 )}
 
-      {activeAnalytic === "source" && (
-        <div className="space-y-6">
-          {/* Source Analysis */}
-          <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-            <CardHeader>
-              <CardTitle className="text-emerald-700">Source-wise Performance Analysis</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={400}>
-                <ComposedChart data={sourceAnalysis}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="source" tick={{ fontSize: 12 }} />
-                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
-                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
-                  <Tooltip />
-                  <Bar yAxisId="left" dataKey="count" fill="#10b981" name="Count" />
-                  <Line
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="conversion"
-                    stroke="#f59e0b"
-                    strokeWidth={3}
-                    name="Conversion %"
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
+{activeAnalytic === "source" && (
+  <div className="space-y-6">
+    {/* Source Analysis Chart */}
+    <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+      <CardHeader>
+        <CardTitle className="text-emerald-700">
+          Source-wise Performance Analysis
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={400}>
+          <ComposedChart data={sourceAnalysisData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="source" tick={{ fontSize: 12 }} />
+            <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
+            <YAxis
+              yAxisId="right"
+              orientation="right"
+              tick={{ fontSize: 12 }}
+            />
+            <Tooltip />
+            <Bar
+              yAxisId="left"
+              dataKey="count"
+              fill="#10b981"
+              name="Count"
+            />
+            <Line
+              yAxisId="right"
+              type="monotone"
+              dataKey="conversion"
+              stroke="#f59e0b"
+              strokeWidth={3}
+              name="Conversion %"
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
 
-          {/* Source Performance Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {sourceAnalysis.map((source, index) => (
-              <Card key={index} className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-emerald-700 flex items-center gap-2">
-                    <Activity className="h-4 w-4" />
-                    {source.source}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Count:</span>
-                      <span className="font-semibold">{source.count}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Revenue:</span>
-                      <span className="font-semibold">${source.revenue.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Conversion:</span>
-                      <Badge className="bg-emerald-100 text-emerald-700">{source.conversion}%</Badge>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
+    {/* Source Performance Cards */}
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {sourceAnalysisData.map((src, i) => (
+        <Card
+          key={i}
+          className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50"
+        >
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-emerald-700 flex items-center gap-2">
+              <Activity className="h-4 w-4" />
+              {src.source}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <div className="flex justify-between">
+                <span className="text-slate-600">Count:</span>
+                <span className="font-semibold">{src.count}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Revenue:</span>
+                <span className="font-semibold">
+                  ${src.revenue.toLocaleString()}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Conversion:</span>
+                <Badge className="bg-emerald-100 text-emerald-700">
+                  {src.conversion}%
+                </Badge>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  </div>
+)}
 
-      {activeAnalytic === "followup" && (
+
+{activeAnalytic === "followup" && (
         <div className="space-y-6">
           {/* Missed Follow-up Analysis */}
           <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
@@ -1340,144 +1789,171 @@ useEffect(() => {
             ))}
           </div>
         </div>
-      )}
+)}
 
-      {activeAnalytic === "livemembers" && (
-        <div className="space-y-6">
-          {/* Live Members Overview */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-emerald-700">Total Members</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-emerald-600">{liveMemberAnalysis.total}</div>
-                <p className="text-xs text-slate-600">All registered members</p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50 to-cyan-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-blue-700">Active Members</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-blue-600">{liveMemberAnalysis.active}</div>
-                <p className="text-xs text-slate-600">
-                  {((liveMemberAnalysis.active / liveMemberAnalysis.total) * 100).toFixed(1)}% active rate
-                </p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-orange-50 to-red-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-orange-700">Inactive Members</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-orange-600">{liveMemberAnalysis.inactive}</div>
-                <p className="text-xs text-slate-600">Need attention</p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-purple-50 to-indigo-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-purple-700">Activity Rate</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-purple-600">
-                  {((liveMemberAnalysis.active / liveMemberAnalysis.total) * 100).toFixed(1)}%
-                </div>
-                <p className="text-xs text-slate-600">Overall engagement</p>
-              </CardContent>
-            </Card>
+{activeAnalytic === "livemembers" && (
+  <div className="space-y-6">
+    {/* Overview Cards */}
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-emerald-700">Total Members</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-emerald-600">{liveMembers.total}</div>
+          <p className="text-xs text-slate-600">All registered members</p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50 to-cyan-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-blue-700">Active Members</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-blue-600">{liveMembers.active}</div>
+          <p className="text-xs text-slate-600">
+            {((liveMembers.active / liveMembers.total) * 100).toFixed(1)}% active rate
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-orange-50 to-red-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-orange-700">Inactive Members</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-orange-600">{liveMembers.inactive}</div>
+          <p className="text-xs text-slate-600">Need attention</p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-purple-50 to-indigo-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-purple-700">Activity Rate</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-purple-600">
+            {((liveMembers.active / liveMembers.total) * 100).toFixed(1)}%
           </div>
+          <p className="text-xs text-slate-600">Overall engagement</p>
+        </CardContent>
+      </Card>
+    </div>
 
-          {/* Live Members Analysis Charts */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="text-emerald-700">Location-wise Distribution</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={liveMemberAnalysis.locationWise}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="location" tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip />
-                    <Bar dataKey="active" stackId="a" fill="#10b981" name="Active" />
-                    <Bar dataKey="inactive" stackId="a" fill="#ef4444" name="Inactive" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
+    {/* Location & Package Charts */}
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+        <CardHeader>
+          <CardTitle className="text-emerald-700">Location-wise Distribution</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={liveMembers.locationWise}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis dataKey="location" tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 12 }} />
+              <Tooltip />
+              <Bar dataKey="active" stackId="a" fill="#10b981" name="Active" />
+              <Bar dataKey="inactive" stackId="a" fill="#ef4444" name="Inactive" />
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
 
-            <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="text-emerald-700">Package-wise Distribution</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={liveMemberAnalysis.packageWise}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ package: pkg, total }) => `${pkg}: ${total}`}
-                      outerRadius={80}
-                      fill="#8884d8"
-                      dataKey="total"
-                    >
-                      {liveMemberAnalysis.packageWise.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </div>
+ <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+    <CardHeader>
+      <CardTitle className="text-emerald-700">Package-wise Distribution</CardTitle>
+    </CardHeader>
+    <CardContent>
+      <ResponsiveContainer width="100%" height={300}>
+        <PieChart>
+          <Pie
+            data={liveMembers.packageDistribution}
+            cx="50%"
+            cy="50%"
+            nameKey="package"
+            dataKey="total"
+            labelLine={false}
+            label={({ name, percent }) =>
+              `${name}: ${(percent * 100).toFixed(1)}%`
+            }
+            outerRadius={80}
+          >
+            {liveMembers.packageDistribution.map((_, idx) => (
+              <Cell key={idx} fill={COLORS[idx % COLORS.length]} />
+            ))}
+          </Pie>
+          <Tooltip
+            formatter={(value, name) => {
+              const total = liveMembers.packageDistribution
+                .reduce((sum, entry) => sum + entry.total, 0)
+              const pct = ((value / total) * 100).toFixed(1)
+              return [`${pct}%`, name]
+            }}
+          />
+        </PieChart>
+      </ResponsiveContainer>
+    </CardContent>
+  </Card>
+    </div>
 
-          {/* Age Category and Profession Analysis */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="text-emerald-700">Age Category Distribution</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={liveMemberAnalysis.ageCategoryWise} layout="horizontal">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis type="number" tick={{ fontSize: 12 }} />
-                    <YAxis dataKey="category" type="category" tick={{ fontSize: 12 }} />
-                    <Tooltip />
-                    <Bar dataKey="active" fill="#10b981" name="Active" />
-                    <Bar dataKey="inactive" fill="#ef4444" name="Inactive" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
+{/* Age Category Distribution */}
+<Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+  <CardHeader>
+    <CardTitle className="text-emerald-700">Age Category Distribution</CardTitle>
+  </CardHeader>
+  <CardContent>
+    <ResponsiveContainer width="100%" height={300}>
+      <BarChart
+        data={liveMembers.ageCategoryWise}
+        layout="vertical"              // ← here!
+      >
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+        <XAxis type="number" tick={{ fontSize: 12 }} />
+        <YAxis
+          dataKey="category"
+          type="category"
+          tick={{ fontSize: 12 }}
+        />
+        <Tooltip />
+        <Bar dataKey="active" fill="#10b981" name="Active" />
+        <Bar dataKey="inactive" fill="#ef4444" name="Inactive" />
+      </BarChart>
+    </ResponsiveContainer>
+  </CardContent>
+  </Card>
 
-            <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="text-emerald-700">Profession-wise Distribution</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={liveMemberAnalysis.professionWise} layout="horizontal">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis type="number" tick={{ fontSize: 12 }} />
-                    <YAxis dataKey="profession" type="category" tick={{ fontSize: 10 }} />
-                    <Tooltip />
-                    <Bar dataKey="active" fill="#10b981" name="Active" />
-                    <Bar dataKey="inactive" fill="#ef4444" name="Inactive" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      )}
+{/* Profession-wise Distribution */}
+<Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+  <CardHeader>
+    <CardTitle className="text-emerald-700">Profession-wise Distribution</CardTitle>
+  </CardHeader>
+  <CardContent>
+    <ResponsiveContainer width="100%" height={300}>
+      <BarChart
+        data={liveMembers.professionWise}
+        layout="vertical"              // ← and here!
+      >
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+        <XAxis type="number" tick={{ fontSize: 10 }} />
+        <YAxis
+          dataKey="profession"
+          type="category"
+          tick={{ fontSize: 12 }}
+        />
+        <Tooltip />
+        <Bar dataKey="active" fill="#10b981" name="Active" />
+        <Bar dataKey="inactive" fill="#ef4444" name="Inactive" />
+      </BarChart>
+    </ResponsiveContainer>
+  </CardContent>
+</Card>
 
-      {activeAnalytic === "renewaltrends" && (
+  </div>
+)}
+
+
+{activeAnalytic === "renewaltrends" && (
         <div className="space-y-6">
           {/* Renewal Trends Overview */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -1561,7 +2037,7 @@ useEffect(() => {
             </CardContent>
           </Card>
         </div>
-      )}
+)}
     </div>
   )
 }

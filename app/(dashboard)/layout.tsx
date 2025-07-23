@@ -5,6 +5,7 @@ import React, { useState, ReactNode } from "react";
 import Sidebar from "@/components/Sidebar";
 import Header from "@/components/Header";
 import { AuthProvider } from "@/components/auth/auth-provider";
+import { AuthGuard } from "@/components/AuthGuard"; 
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -12,6 +13,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const sidebarWidthRem = collapsed ? 4 : 16;
 
   return (
+     <AuthGuard>     
     <AuthProvider>
       <div className="flex overflow-x-hidden">
         {/* Sidebar */}
@@ -39,5 +41,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         </div>
       </div>
     </AuthProvider>
+     </AuthGuard>     
   );
 }

@@ -177,7 +177,10 @@ export default function LeadInformationTab() {
   const [sourceFilter, setSourceFilter] = useState("all")
   const [showBillGenerator, setShowBillGenerator] = useState(false)
   const [showInteractionForm, setShowInteractionForm] = useState(false)
-  
+  const SUPERADMIN_ROLE    = 'b00060fe-175a-459b-8f72-957055ee8c55'
+const ADMIN_ROLE         = '46e786df-0272-4f22-aec2-56d2a517fa9d'
+const SALES_MANAGER_ROLE = '11b93954-9a56-4ea5-a02c-15b731ee9dfb'
+const EXECUTIVE_ROLE     = '1fe1759c-dc14-4933-947a-c240c046bcde'
   // Form states
   const [newBill, setNewBill] = useState({
     package_name: "",
@@ -209,23 +212,53 @@ export default function LeadInformationTab() {
   })
 
   // Fetch all leads
-  const fetchLeads = async () => {
-     setLoading(true)
-    try {
-      const { data, error } = await supabase
-        .from('leads')
-        .select('*')
-        .order('created_at', { ascending: false })
-      
-      if (error) throw error
-      setLeads(data || [])
-    } catch (error) {
-      console.error('Error fetching leads:', error)
-      toast.error('Failed to fetch leads')
-    }finally {
-     setLoading(false)
+// Fetch all leads (with role‑based filter)
+const fetchLeads = async () => {
+  setLoading(true)
+  try {
+    // 1) get current supabase user (for user.id)
+    const {
+      data: { user },
+      error: authError
+    } = await supabase.auth.getUser()
+    if (authError || !user) throw authError ?? new Error('No user session')
+
+    // 2) read role_id from localStorage
+    const raw = localStorage.getItem('userProfile')
+    const roleId = raw ? JSON.parse(raw).role_id : null
+
+    // 3) build base query
+    let query = supabase.from<Lead>('leads').select('*')
+
+    // 4) if Executive, restrict to their assigned leads
+    if (roleId === EXECUTIVE_ROLE) {
+      const { data: assignments, error: assignErr } = await supabase
+        .from('lead_assignments')
+        .select('lead_id')
+        .eq('assigned_to', user.id)
+      if (assignErr) throw assignErr
+
+      const ids = (assignments || []).map(a => a.lead_id)
+      if (ids.length === 0) {
+        setLeads([])    // no assignments → empty
+        return
+      }
+      query = query.in('id', ids)
     }
+    // (Superadmin, Admin, Sales Manager all get the un‑filtered query)
+
+    // 5) execute
+    const { data, error } = await query.order('created_at', { ascending: false })
+    if (error) throw error
+
+    setLeads(data || [])
+  } catch (err: any) {
+    console.error('Error fetching leads:', err)
+    toast.error('Failed to fetch leads')
+  } finally {
+    setLoading(false)
   }
+}
 
   // Find user by lead phone/email
   const findUserByLead = async (lead: Lead) => {
