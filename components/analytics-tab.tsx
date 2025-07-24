@@ -273,7 +273,15 @@ const [conversionData, setConversionData] = useState<{
 }>({
   sourceWise: [],
   rmWise: [],
+  monthWise: [],
+
 })
+
+const [renewalAnalytics, setRenewalAnalytics] = useState({
+  sourceWise: [],
+  coachWise: [],
+});
+
 
 const [sourceAnalysisData, setSourceAnalysisData] = useState<
   { source: string; count: number; revenue: number; conversion: number }[]
@@ -718,10 +726,14 @@ useEffect(() => {
     // 8) Aggregate by source & by RM
     const srcAgg: Record<string, { leads: number; conversions: number; revenue: number }> = {};
     const rmAgg: Record<string, { leads: number; conversions: number; revenue: number }> = {};
+    const monthWiseAgg: Record<string, { leads: number; conversions: number; revenue: number }> = {}; // For monthly aggregation
 
     leads.forEach(lead => {
       const { id, email, source = "Unknown" } = lead;
-      // Source‐wise
+      const leadMonth = new Date().getMonth(); // Assuming you get the month of the lead creation or data
+      const monthKey = new Date().toLocaleString("default", { month: "short" }); // e.g., "Jan"
+
+      // Source-wise aggregation
       srcAgg[source] ??= { leads: 0, conversions: 0, revenue: 0 };
       srcAgg[source].leads++;
       if (convertedEmails.has(email)) {
@@ -729,7 +741,7 @@ useEffect(() => {
         srcAgg[source].revenue += revByLead[id] ?? 0;
       }
 
-      // RM‐wise
+      // RM-wise aggregation
       const rmId = leadToRmId[id];
       const rmName = userMap[rmId] || "Unassigned";
       rmAgg[rmName] ??= { leads: 0, conversions: 0, revenue: 0 };
@@ -738,9 +750,17 @@ useEffect(() => {
         rmAgg[rmName].conversions++;
         rmAgg[rmName].revenue += revByLead[id] ?? 0;
       }
+
+      // Monthly aggregation
+      monthWiseAgg[monthKey] ??= { leads: 0, conversions: 0, revenue: 0 };
+      monthWiseAgg[monthKey].leads++;
+      if (convertedEmails.has(email)) {
+        monthWiseAgg[monthKey].conversions++;
+        monthWiseAgg[monthKey].revenue += revByLead[id] ?? 0;
+      }
     });
 
-    // 9) Format arrays with conversion % 
+    // 9) Format the aggregated data
     const sourceWise = Object.entries(srcAgg).map(([source, v]) => ({
       source,
       leads: v.leads,
@@ -748,6 +768,7 @@ useEffect(() => {
       rate: parseFloat(((v.conversions / v.leads) * 100).toFixed(1)),
       revenue: v.revenue,
     }));
+
     const rmWise = Object.entries(rmAgg).map(([rm, v]) => ({
       rm,
       leads: v.leads,
@@ -756,9 +777,19 @@ useEffect(() => {
       revenue: v.revenue,
     }));
 
-    setConversionData({ sourceWise, rmWise });
+    const monthWise = Object.entries(monthWiseAgg).map(([month, v]) => ({
+      month,
+      leads: v.leads,
+      conversions: v.conversions,
+      rate: parseFloat(((v.conversions / v.leads) * 100).toFixed(1)),
+      revenue: v.revenue,
+    }));
+
+    // 10) Update the state
+    setConversionData({ sourceWise, rmWise, monthWise });
   })();
 }, [activeAnalytic]);
+
 
 
 useEffect(() => {
@@ -830,6 +861,104 @@ useEffect(() => {
   })();
 }, [activeAnalytic]);
 
+useEffect(() => {
+  if (activeAnalytic !== "renewals") return;
+
+  (async () => {
+    // 1. Fetch all payments from both 'manual_payment' and 'payment_links' tables
+    const [{ data: manualPayments, error: manualError }, { data: paymentLinks, error: linkError }] = await Promise.all([
+      supabase.from("manual_payment").select("amount, payment_date, lead_id"),
+      supabase.from("payment_links").select("amount, payment_date, lead_id"),
+    ]);
+
+    if (manualError || linkError) {
+      console.error("Payments fetch error:", manualError ?? linkError);
+      return;
+    }
+
+    // 2. Fetch all leads for source and lead_id data (email, lead_id, source)
+    const { data: leads, error: leadsError } = await supabase
+      .from("leads")
+      .select("id, email, source");
+
+    if (leadsError) {
+      console.error("Leads fetch error:", leadsError);
+      return;
+    }
+
+    // 3. Create a map to associate each lead with its source
+    const leadSourceMap: Record<string, string> = {};
+    leads.forEach((lead) => {
+      leadSourceMap[lead.id] = lead.source || "Unknown";
+    });
+
+    // 4. Aggregate payments by user, track total and renewed payments
+    const userPaymentsMap: Record<string, { total: number; renewed: number; lastPaymentDate: Date }> = {};
+
+    const allPayments = [...(manualPayments || []), ...(paymentLinks || [])];
+
+    allPayments.forEach((payment) => {
+      const { lead_id, payment_date, amount } = payment;
+      const paymentDate = new Date(payment_date);
+      const userPayments = userPaymentsMap[lead_id] || { total: 0, renewed: 0, lastPaymentDate: new Date(0) };
+
+      // Update total payment amount for the user
+      userPayments.total += amount;
+
+      // Check if this payment is a renewal (based on date)
+      const isRenewal = paymentDate > userPayments.lastPaymentDate;
+
+      if (isRenewal) {
+        userPayments.renewed += 1;  // Increment the renewal count
+        userPayments.lastPaymentDate = paymentDate;  // Update the last payment date
+      }
+
+      userPaymentsMap[lead_id] = userPayments;
+    });
+
+    // 5. Aggregate renewals by source and coach (if available)
+    const renewalBySource: Record<string, { total: number; renewed: number; rate: number }> = {};
+    const renewalByCoach: Record<string, { total: number; renewed: number; rate: number }> = {};
+
+    Object.keys(userPaymentsMap).forEach((lead_id) => {
+      const { total, renewed } = userPaymentsMap[lead_id];
+      const source = leadSourceMap[lead_id] || "Unknown";
+      const coach = "Default Coach"; // Replace this with actual coach data if available
+
+      if (!renewalBySource[source]) renewalBySource[source] = { total: 0, renewed: 0, rate: 0 };
+      if (!renewalByCoach[coach]) renewalByCoach[coach] = { total: 0, renewed: 0, rate: 0 };
+
+      renewalBySource[source].total += total;
+      renewalBySource[source].renewed += renewed;
+
+      renewalByCoach[coach].total += total;
+      renewalByCoach[coach].renewed += renewed;
+    });
+
+    // 6. Calculate the renewal rate
+    const calculateRate = (renewed: number, total: number) => (total > 0 ? ((renewed / total) * 100).toFixed(1) : "0.0");
+
+    const sourceWise = Object.entries(renewalBySource).map(([source, { total, renewed }]) => ({
+      source,
+      total,
+      renewed,
+      rate: calculateRate(renewed, total),
+    }));
+
+    const coachWise = Object.entries(renewalByCoach).map(([coach, { total, renewed }]) => ({
+      coach,
+      total,
+      renewed,
+      rate: calculateRate(renewed, total),
+    }));
+
+    // 7. Set the state with the aggregated data
+    setRenewalAnalytics({
+      sourceWise,
+      coachWise,
+    });
+  })();
+}, [activeAnalytic]);
 
 
 
@@ -1217,11 +1346,38 @@ useEffect(() => {
         <CardTitle className="text-emerald-700">Monthly Conversion Trends</CardTitle>
       </CardHeader>
       <CardContent>
-        <ResponsiveContainer width="100%" height={400}>
-          <AreaChart data={conversionAnalytics.monthWise}>
-            {/* …your existing defs & <Area> layers… */}
-          </AreaChart>
-        </ResponsiveContainer>
+          <ResponsiveContainer width="100%" height={400}>
+        <AreaChart data={conversionData.monthWise}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+          <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+          <YAxis tick={{ fontSize: 12 }} />
+          <Tooltip />
+          <Area
+            type="monotone"
+            dataKey="conversions"
+            stroke="#10b981"
+            fill="#10b981"
+            name="Conversions"
+            dot={{ fill: "#10b981", strokeWidth: 2, r: 6 }}
+          />
+          <Area
+            type="monotone"
+            dataKey="rate"
+            stroke="#f59e0b"
+            fill="#f59e0b"
+            name="Conversion Rate %"
+            dot={{ fill: "#f59e0b", strokeWidth: 2, r: 6 }}
+          />
+          <Area
+            type="monotone"
+            dataKey="revenue"
+            stroke="#3b82f6"
+            fill="#3b82f6"
+            name="Revenue"
+            dot={{ fill: "#3b82f6", strokeWidth: 2, r: 6 }}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
       </CardContent>
     </Card>
   </div>

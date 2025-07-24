@@ -262,7 +262,6 @@ export function LeadsTab() {
   }, [statusFilter, sourceFilter, counselorFilter, priorityFilter, searchTerm, dateRange])
 
   // Fetch leads from Supabase
-
 const fetchLeads = async () => {
   setLoading(true)
   setError(null)
