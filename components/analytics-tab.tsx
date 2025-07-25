@@ -51,62 +51,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!  
 )
 // Enhanced data with comprehensive analytics
-const conversionAnalytics = {
-  sourceWise: [
-    { source: "Website", leads: 145, conversions: 67, rate: 46.2, revenue: 167500 },
-    { source: "Social Media", leads: 132, conversions: 58, rate: 43.9, revenue: 145000 },
-    { source: "Referral", leads: 98, conversions: 52, rate: 53.1, revenue: 156000 },
-    { source: "Cold Call", leads: 87, conversions: 28, rate: 32.2, revenue: 84000 },
-    { source: "Email Campaign", leads: 76, conversions: 31, rate: 40.8, revenue: 93000 },
-  ],
-  rmWise: [
-    { rm: "Sarah Johnson", leads: 156, conversions: 78, rate: 50.0, revenue: 195000 },
-    { rm: "Mike Wilson", leads: 134, conversions: 62, rate: 46.3, revenue: 155000 },
-    { rm: "Lisa Brown", leads: 128, conversions: 54, rate: 42.2, revenue: 135000 },
-    { rm: "John Davis", leads: 120, conversions: 42, rate: 35.0, revenue: 105000 },
-  ],
-  monthWise: [
-    { month: "Jan", leads: 98, conversions: 42, rate: 42.9, revenue: 105000 },
-    { month: "Feb", leads: 112, conversions: 52, rate: 46.4, revenue: 130000 },
-    { month: "Mar", leads: 134, conversions: 67, rate: 50.0, revenue: 167500 },
-    { month: "Apr", leads: 145, conversions: 71, rate: 49.0, revenue: 177500 },
-    { month: "May", leads: 156, conversions: 78, rate: 50.0, revenue: 195000 },
-    { month: "Jun", leads: 167, conversions: 86, rate: 51.5, revenue: 215000 },
-  ],
-}
-
-const renewalAnalytics = {
-  sourceWise: [
-    { source: "Website", total: 89, renewed: 67, rate: 75.3, revenue: 167500 },
-    { source: "Social Media", total: 76, renewed: 54, rate: 71.1, revenue: 135000 },
-    { source: "Referral", total: 65, renewed: 52, rate: 80.0, revenue: 156000 },
-    { source: "Cold Call", total: 45, renewed: 28, rate: 62.2, revenue: 84000 },
-    { source: "Email Campaign", total: 38, renewed: 25, rate: 65.8, revenue: 75000 },
-  ],
-  coachWise: [
-    { coach: "Sarah Johnson", total: 78, renewed: 62, rate: 79.5, revenue: 155000 },
-    { coach: "Mike Wilson", total: 67, renewed: 48, rate: 71.6, revenue: 120000 },
-    { coach: "Lisa Brown", total: 54, renewed: 38, rate: 70.4, revenue: 95000 },
-    { coach: "John Davis", total: 42, renewed: 27, rate: 64.3, revenue: 67500 },
-  ],
-  monthWise: [
-    { month: "Jan", total: 45, renewed: 32, rate: 71.1, revenue: 80000 },
-    { month: "Feb", total: 52, renewed: 38, rate: 73.1, revenue: 95000 },
-    { month: "Mar", total: 67, renewed: 51, rate: 76.1, revenue: 127500 },
-    { month: "Apr", total: 71, renewed: 56, rate: 78.9, revenue: 140000 },
-    { month: "May", total: 78, renewed: 62, rate: 79.5, revenue: 155000 },
-    { month: "Jun", total: 86, renewed: 69, rate: 80.2, revenue: 172500 },
-  ],
-}
-
-const salesGraphData = [
-  { month: "Jan", basic: 25000, standard: 45000, premium: 67000, enterprise: 85000 },
-  { month: "Feb", basic: 28000, standard: 52000, premium: 78000, enterprise: 95000 },
-  { month: "Mar", basic: 32000, standard: 58000, premium: 89000, enterprise: 112000 },
-  { month: "Apr", basic: 35000, standard: 65000, premium: 95000, enterprise: 125000 },
-  { month: "May", basic: 38000, standard: 72000, premium: 108000, enterprise: 142000 },
-  { month: "Jun", basic: 42000, standard: 78000, premium: 125000, enterprise: 165000 },
-]
 
 const packageAnalysis = [
   { package: "Basic", count: 145, revenue: 217500, avgValue: 1500, retention: 68.5 },
@@ -206,6 +150,52 @@ export function AnalyticsTab() {
   const [searchTerm, setSearchTerm] = useState("")
   const [dateRange, setDateRange] = useState<DateRange | undefined>()
   
+  // Role-based access control
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
+  const [assignedLeadIds, setAssignedLeadIds] = useState<string[]>([])
+  
+  // Role constants
+  const EXECUTIVE_ROLE = '1fe1759c-dc14-4933-947a-c240c046bcde'
+  const SALES_MANAGER_ROLE = '11b93954-9a56-4ea5-a02c-15b731ee9dfb'
+  const ADMIN_ROLE = '46e786df-0272-4f22-aec2-56d2a517fa9d'
+  const SUPERADMIN_ROLE = 'b00060fe-175a-459b-8f72-957055ee8c55'
+  
+  // Initialize user role and assignments
+  useEffect(() => {
+    const initializeUserAccess = async () => {
+      try {
+        // Get user profile from localStorage
+        const userProfile = localStorage.getItem('userProfile')
+        if (!userProfile) return
+        
+        const { id: userId, role_id: roleId } = JSON.parse(userProfile)
+        setCurrentUserId(userId)
+        setCurrentUserRole(roleId)
+        
+        // If user is executive, fetch their assigned lead IDs
+        if (roleId === EXECUTIVE_ROLE) {
+          const { data: assignments, error } = await supabase
+            .from('lead_assignments')
+            .select('lead_id')
+            .eq('assigned_to', userId)
+          
+          if (error) {
+            console.error('Error fetching lead assignments:', error)
+            return
+          }
+          
+          const leadIds = assignments.map(a => a.lead_id)
+          setAssignedLeadIds(leadIds)
+        }
+      } catch (error) {
+        console.error('Error initializing user access:', error)
+      }
+    }
+    
+    initializeUserAccess()
+  }, [])
+  
   const [genderAnalysisData, setGenderAnalysisData] = useState<
   { gender: string; count: number; percentage: number }[]
 >([])
@@ -292,82 +282,125 @@ const [sourceAnalysisData, setSourceAnalysisData] = useState<
 useEffect(() => {
   if (activeAnalytic !== 'gender') return
   ;(async () => {
-    // fetch only the gender column
-    const { data, error } = await supabase
-      .from('users')
-      .select('gender')
+    try {
+      let query = supabase.from('users').select('gender, email')
+      
+      // Apply role-based filtering for executives
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        // Get emails of assigned leads
+        const { data: leads, error: leadsError } = await supabase
+          .from('leads')
+          .select('email')
+          .in('id', assignedLeadIds)
+        
+        if (leadsError) {
+          console.error('Error fetching assigned leads:', leadsError)
+          return
+        }
+        
+        const assignedEmails = leads.map(l => l.email)
+        if (assignedEmails.length === 0) {
+          setGenderAnalysisData([])
+          return
+        }
+        
+        query = query.in('email', assignedEmails)
+      }
+      
+      const { data, error } = await query
+      
+      if (error) {
+        console.error('Supabase error:', error.message)
+        return
+      }
 
-    if (error) {
-      console.error('Supabase error:', error.message)
-      return
+      const total = data!.length
+      const counts = data!.reduce((acc, { gender }) => {
+        const g = gender || 'Unknown'
+        acc[g] = (acc[g] ?? 0) + 1
+        return acc
+      }, {} as Record<string, number>)
+
+      setGenderAnalysisData(
+        Object.entries(counts).map(([gender, count]) => ({
+          gender,
+          count,
+          percentage: parseFloat(((count / total) * 100).toFixed(1)),
+        }))
+      )
+    } catch (error) {
+      console.error('Error in gender analysis:', error)
     }
-
-    const total = data!.length
-    const counts = data!.reduce((acc, { gender }) => {
-      const g = gender || 'Unknown'
-      acc[g] = (acc[g] ?? 0) + 1
-      return acc
-    }, {} as Record<string, number>)
-
-    setGenderAnalysisData(
-      Object.entries(counts).map(([gender, count]) => ({
-        gender,
-        count,
-        percentage: parseFloat(((count / total) * 100).toFixed(1)),
-      }))
-    )
   })()
-}, [activeAnalytic])
+}, [activeAnalytic, currentUserRole, assignedLeadIds])
 
 useEffect(() => {
   if (activeAnalytic !== "package") return
 
   ;(async () => {
-    // fetch plan & amount from both tables
-    const [{ data: manual, error: em }, { data: links, error: el }] = await Promise.all([
-      supabase.from("manual_payment").select("plan, amount"),
-      supabase.from("payment_links").select("plan, amount"),
-    ])
+    try {
+      let manualQuery = supabase.from("manual_payment").select("plan, amount, lead_id")
+      let linksQuery = supabase.from("payment_links").select("plan, amount, lead_id")
+      
+      // Apply role-based filtering for executives
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        manualQuery = manualQuery.in('lead_id', assignedLeadIds)
+        linksQuery = linksQuery.in('lead_id', assignedLeadIds)
+      }
+      
+      const [{ data: manual, error: em }, { data: links, error: el }] = await Promise.all([
+        manualQuery,
+        linksQuery,
+      ])
 
-    if (em || el) {
-      console.error(em ?? el)
-      return
+      if (em || el) {
+        console.error(em ?? el)
+        return
+      }
+
+      const all = [...(manual || []), ...(links || [])]
+      const agg: Record<string, { count: number; revenue: number }> = {}
+
+      all.forEach(({ plan, amount }) => {
+        const p = plan || "Unknown"
+        if (!agg[p]) agg[p] = { count: 0, revenue: 0 }
+        agg[p].count += 1
+        agg[p].revenue += amount
+      })
+
+      const result = Object.entries(agg).map(([plan, { count, revenue }]) => ({
+        plan,
+        count,
+        revenue,
+        avgValue: Math.round(revenue / count),
+      }))
+
+      setPackageAnalysisData(result)
+    } catch (error) {
+      console.error('Error in package analysis:', error)
     }
-
-    const all = [...(manual || []), ...(links || [])]
-    const agg: Record<string, { count: number; revenue: number }> = {}
-
-    all.forEach(({ plan, amount }) => {
-      const p = plan || "Unknown"
-      if (!agg[p]) agg[p] = { count: 0, revenue: 0 }
-      agg[p].count += 1
-      agg[p].revenue += amount
-    })
-
-    const result = Object.entries(agg).map(([plan, { count, revenue }]) => ({
-      plan,
-      count,
-      revenue,
-      avgValue: Math.round(revenue / count),
-    }))
-
-    setPackageAnalysisData(result)
   })()
-}, [activeAnalytic])
+}, [activeAnalytic, currentUserRole, assignedLeadIds])
 
 useEffect(() => {
   if (activeAnalytic !== "city") return;
 
   (async () => {
-    // 1. Fetch all leads (email, city, id)
-    const { data: leads, error: leadsError } = await supabase
-      .from("leads")
-      .select("id, email, city");
+    try {
+      // 1. Fetch leads with role-based filtering
+      let leadsQuery = supabase.from("leads").select("id, email, city")
+      
+      // Apply role-based filtering for executives
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        leadsQuery = leadsQuery.in('id', assignedLeadIds)
+      }
+      
+      const { data: leads, error: leadsError } = await leadsQuery
 
-    if (leadsError) {
-      console.error("Leads fetch error:", leadsError);
-      return;
-    }
+      if (leadsError) {
+        console.error("Leads fetch error:", leadsError);
+        return;
+      }
 
     // 2. Fetch all manual payments
     const { data: manualPayments, error: manualError } = await supabase
@@ -463,18 +496,31 @@ useEffect(() => {
     );
 
     setCityAnalysisData(cityData);
+    } catch (error) {
+      console.error('Error in city analysis:', error)
+    }
   })();
-}, [activeAnalytic]);
+}, [activeAnalytic, currentUserRole, assignedLeadIds]);
 
 useEffect(() => {
   if (activeAnalytic !== "sales") return;
 
   ;(async () => {
-    // fetch payments
-    const [manualRes, linkRes] = await Promise.all([
-      supabase.from("manual_payment").select("plan, amount, payment_date"),
-      supabase.from("payment_links").select("plan, amount, payment_date"),
-    ]);
+    try {
+      // fetch payments with role-based filtering
+      let manualQuery = supabase.from("manual_payment").select("plan, amount, payment_date, lead_id")
+      let linksQuery = supabase.from("payment_links").select("plan, amount, payment_date, lead_id")
+      
+      // Apply role-based filtering for executives
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        manualQuery = manualQuery.in('lead_id', assignedLeadIds)
+        linksQuery = linksQuery.in('lead_id', assignedLeadIds)
+      }
+      
+      const [manualRes, linkRes] = await Promise.all([
+        manualQuery,
+        linksQuery,
+      ]);
     if (manualRes.error || linkRes.error) {
       console.error(manualRes.error ?? linkRes.error);
       return;
@@ -534,25 +580,60 @@ useEffect(() => {
       bestMonthRevenue,
       avgDealSize,
     });
+    } catch (error) {
+      console.error('Error in sales analysis:', error)
+    }
   })();
-}, [activeAnalytic]);
+}, [activeAnalytic, currentUserRole, assignedLeadIds]);
 
 
 useEffect(() => {
   if (activeAnalytic !== "livemembers") return
 
   ;(async () => {
-    // 1) Pull users
-    const { data: users, error: uErr } = await supabase
-      .from("users")
-      .select("email, is_active, date_of_birth")
-    if (uErr) return console.error(uErr)
+    try {
+      // 1) Pull users with role-based filtering
+      let usersQuery = supabase.from("users").select("email, is_active, date_of_birth")
+      
+      // 2) Pull leads with role-based filtering
+      let leadsQuery = supabase.from("leads").select("email, city, profession")
+      
+      // Apply role-based filtering for executives
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        // Get emails of assigned leads first
+        const { data: assignedLeads, error: assignedError } = await supabase
+          .from('leads')
+          .select('email')
+          .in('id', assignedLeadIds)
+        
+        if (assignedError) {
+          console.error('Error fetching assigned leads:', assignedError)
+          return
+        }
+        
+        const assignedEmails = assignedLeads.map(l => l.email)
+        if (assignedEmails.length === 0) {
+          setLiveMembers({
+            total: 0,
+            active: 0,
+            inactive: 0,
+            locationWise: [],
+            packageDistribution: [],
+            ageCategoryWise: [],
+            professionWise: [],
+          })
+          return
+        }
+        
+        usersQuery = usersQuery.in('email', assignedEmails)
+        leadsQuery = leadsQuery.in('id', assignedLeadIds)
+      }
+      
+      const { data: users, error: uErr } = await usersQuery
+      if (uErr) return console.error(uErr)
 
-    // 2) Pull leads (for city & profession)
-    const { data: leads, error: lErr } = await supabase
-      .from("leads")
-      .select("email, city, profession")
-    if (lErr) return console.error(lErr)
+      const { data: leads, error: lErr } = await leadsQuery
+      if (lErr) return console.error(lErr)
 
     // 3) Pull plans
     const [mRes, pRes] = await Promise.all([
@@ -651,21 +732,30 @@ useEffect(() => {
       ageCategoryWise,
       professionWise,
     })
+    } catch (error) {
+      console.error('Error in live members analysis:', error)
+    }
   })()
-}, [activeAnalytic])
+}, [activeAnalytic, currentUserRole, assignedLeadIds])
 
 useEffect(() => {
   if (activeAnalytic !== "conversion") return;
 
   (async () => {
-    // 1) Fetch all leads
-    const { data: leads, error: leadsErr } = await supabase
-      .from("leads")
-      .select("id, email, source");
-    if (leadsErr) {
-      console.error("Leads error:", leadsErr);
-      return;
-    }
+    try {
+      // 1) Fetch leads with role-based filtering
+      let leadsQuery = supabase.from("leads").select("id, email, source")
+      
+      // Apply role-based filtering for executives
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        leadsQuery = leadsQuery.in('id', assignedLeadIds)
+      }
+      
+      const { data: leads, error: leadsErr } = await leadsQuery
+      if (leadsErr) {
+        console.error("Leads error:", leadsErr);
+        return;
+      }
 
     // 2) Fetch all lead assignments
     const { data: assignments, error: assignErr } = await supabase
@@ -787,8 +877,11 @@ useEffect(() => {
 
     // 10) Update the state
     setConversionData({ sourceWise, rmWise, monthWise });
+    } catch (error) {
+      console.error('Error in conversion analysis:', error)
+    }
   })();
-}, [activeAnalytic]);
+}, [activeAnalytic, currentUserRole, assignedLeadIds]);
 
 
 
@@ -796,14 +889,20 @@ useEffect(() => {
   if (activeAnalytic !== "source") return;
 
   (async () => {
-    // 1) Fetch all leads
-    const { data: leads, error: leadsErr } = await supabase
-      .from("leads")
-      .select("id, email, source");
-    if (leadsErr) {
-      console.error("Leads error:", leadsErr);
-      return;
-    }
+    try {
+      // 1) Fetch leads with role-based filtering
+      let leadsQuery = supabase.from("leads").select("id, email, source")
+      
+      // Apply role-based filtering for executives
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        leadsQuery = leadsQuery.in('id', assignedLeadIds)
+      }
+      
+      const { data: leads, error: leadsErr } = await leadsQuery
+      if (leadsErr) {
+        console.error("Leads error:", leadsErr);
+        return;
+      }
 
     // 2) Fetch all user emails (converted leads)
     const { data: users, error: usersErr } = await supabase
@@ -858,33 +957,51 @@ useEffect(() => {
     );
 
     setSourceAnalysisData(result);
+    } catch (error) {
+      console.error('Error in source analysis:', error)
+    }
   })();
-}, [activeAnalytic]);
+}, [activeAnalytic, currentUserRole, assignedLeadIds]);
 
 useEffect(() => {
   if (activeAnalytic !== "renewals") return;
 
   (async () => {
-    // 1. Fetch all payments from both 'manual_payment' and 'payment_links' tables
-    const [{ data: manualPayments, error: manualError }, { data: paymentLinks, error: linkError }] = await Promise.all([
-      supabase.from("manual_payment").select("amount, payment_date, lead_id"),
-      supabase.from("payment_links").select("amount, payment_date, lead_id"),
-    ]);
+    try {
+      // 1. Fetch payments with role-based filtering
+      let manualQuery = supabase.from("manual_payment").select("amount, payment_date, lead_id")
+      let linksQuery = supabase.from("payment_links").select("amount, payment_date, lead_id")
+      
+      // Apply role-based filtering for executives
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        manualQuery = manualQuery.in('lead_id', assignedLeadIds)
+        linksQuery = linksQuery.in('lead_id', assignedLeadIds)
+      }
+      
+      const [{ data: manualPayments, error: manualError }, { data: paymentLinks, error: linkError }] = await Promise.all([
+        manualQuery,
+        linksQuery,
+      ]);
 
-    if (manualError || linkError) {
-      console.error("Payments fetch error:", manualError ?? linkError);
-      return;
-    }
+      if (manualError || linkError) {
+        console.error("Payments fetch error:", manualError ?? linkError);
+        return;
+      }
 
-    // 2. Fetch all leads for source and lead_id data (email, lead_id, source)
-    const { data: leads, error: leadsError } = await supabase
-      .from("leads")
-      .select("id, email, source");
+      // 2. Fetch leads with role-based filtering
+      let leadsQuery = supabase.from("leads").select("id, email, source")
+      
+      // Apply role-based filtering for executives
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        leadsQuery = leadsQuery.in('id', assignedLeadIds)
+      }
+      
+      const { data: leads, error: leadsError } = await leadsQuery
 
-    if (leadsError) {
-      console.error("Leads fetch error:", leadsError);
-      return;
-    }
+      if (leadsError) {
+        console.error("Leads fetch error:", leadsError);
+        return;
+      }
 
     // 3. Create a map to associate each lead with its source
     const leadSourceMap: Record<string, string> = {};
@@ -957,8 +1074,11 @@ useEffect(() => {
       sourceWise,
       coachWise,
     });
+    } catch (error) {
+      console.error('Error in renewals analysis:', error)
+    }
   })();
-}, [activeAnalytic]);
+}, [activeAnalytic, currentUserRole, assignedLeadIds]);
 
 
 

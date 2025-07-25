@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-
 import { useState, useRef, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -22,7 +21,7 @@ import {
   BarChart3,
   Users,
 } from "lucide-react"
-import { supabase } from "@/lib/supabase"
+// Removed: import { supabase } from "@/lib/supabase"
 
 interface Message {
   id: string
@@ -55,19 +54,9 @@ export function Talktoyourdata() {
     }
   }, [messages])
 
-  const runSupabaseCode = async (code: string) => {
-  // new Function is the easiest way to inject `supabase` into its scope
-  const fn = new Function(
-    "supabase",
-    `"use strict";
-     return (async () => {
-       ${code}
-     })();`
-  );
-  return fn(supabase) as Promise<{ data: any; error: any }>;
-}
+  // Removed: runSupabaseCode function, as it will now run on the server
 
-const handleSendMessage = async () => {
+  const handleSendMessage = async () => {
     if (!inputMessage.trim()) return
 
     // 1) push user message
@@ -78,50 +67,50 @@ const handleSendMessage = async () => {
       timestamp: new Date(),
       type: "query",
     }
-    setMessages(prev => [...prev, userMessage])
+    setMessages((prev) => [...prev, userMessage])
     setInputMessage("")
     setIsTyping(true)
 
-   try {
-  // 2) call your Next.js route
-  const res = await fetch("/api/agent", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: userMessage.content }),
-  });
-  const payload = await res.json();
-  if (!res.ok) throw new Error(payload.error || "Unknown error");
+    try {
+      // 2) Call your Next.js route, which will now handle both AI generation and Supabase execution
+      const res = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userMessage.content }),
+      })
+      const payload = await res.json()
 
-  // 3) run the supabase-js snippet we got back
-  console.log("🔧 Running snippet:\n", payload.code);
-  const { data, error } = await runSupabaseCode(payload.code);
-  if (error) throw error;
+      if (!res.ok) throw new Error(payload.error || "Unknown error")
 
-  // 4) push bot response
-  const botMessage: Message = {
-    id: (Date.now() + 1).toString(),
-    content: `✅ Here’s your data:\n${JSON.stringify(data, null, 2)}`,
-    sender: "bot",
-    timestamp: new Date(),
-    type: "response",
-  };
-  setMessages(prev => [...prev, botMessage]);
-} catch (err: any) {
-  setMessages(prev => [
-    ...prev,
-    {
-      id: (Date.now() + 1).toString(),
-      content: `Error: ${err.message}`,
-      sender: "bot",
-      timestamp: new Date(),
-      type: "error",
-    },
-  ]);
-} finally {
-  setIsTyping(false);
-}
+      // 3) The payload now directly contains the data or error from the server-side execution
+      const { data, error } = payload
+
+      if (error) throw error
+
+      // 4) push bot response
+      const botMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        content: `✅ Here’s your data:\n${JSON.stringify(data, null, 2)}`,
+        sender: "bot",
+        timestamp: new Date(),
+        type: "response",
+      }
+      setMessages((prev) => [...prev, botMessage])
+    } catch (err: any) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          content: `Error: ${err.message}`,
+          sender: "bot",
+          timestamp: new Date(),
+          type: "error",
+        },
+      ])
+    } finally {
+      setIsTyping(false)
+    }
   }
-
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -177,7 +166,6 @@ const handleSendMessage = async () => {
             <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">Database interactions</p>
           </CardContent>
         </Card>
-
         <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-blue-50 to-blue-100/50 dark:from-blue-950/50 dark:to-blue-900/30">
           <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-transparent" />
           <CardHeader className="pb-3 relative">
@@ -193,7 +181,6 @@ const handleSendMessage = async () => {
             <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">Average response</p>
           </CardContent>
         </Card>
-
         <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-purple-50 to-purple-100/50 dark:from-purple-950/50 dark:to-purple-900/30">
           <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-transparent" />
           <CardHeader className="pb-3 relative">
@@ -209,7 +196,6 @@ const handleSendMessage = async () => {
             <p className="text-xs text-purple-600 dark:text-purple-400 mt-1">Records accessible</p>
           </CardContent>
         </Card>
-
         <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-green-50 to-green-100/50 dark:from-green-950/50 dark:to-green-900/30">
           <div className="absolute inset-0 bg-gradient-to-br from-green-500/10 to-transparent" />
           <CardHeader className="pb-3 relative">
@@ -226,7 +212,6 @@ const handleSendMessage = async () => {
           </CardContent>
         </Card>
       </div>
-
       {/* Modern Chat Interface */}
       <Card className="h-[650px] flex flex-col border-0 bg-gradient-to-br from-white to-gray-50/50 dark:from-gray-900 dark:to-gray-800/50 shadow-xl">
         <CardHeader className="border-b border-gray-200/50 dark:border-gray-700/50 bg-gradient-to-r from-emerald-500/5 to-blue-500/5">
@@ -263,14 +248,13 @@ const handleSendMessage = async () => {
                 variant="outline"
                 size="sm"
                 onClick={clearChat}
-                className="hover:bg-red-50 hover:border-red-200 hover:text-red-600"
+                className="hover:bg-red-50 hover:border-red-200 hover:text-red-600 bg-transparent"
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
             </div>
           </div>
         </CardHeader>
-
         <CardContent className="flex-1 flex flex-col p-0">
           {/* Messages Area */}
           <ScrollArea className="flex-1 p-6" ref={scrollAreaRef}>
@@ -287,7 +271,6 @@ const handleSendMessage = async () => {
                       </AvatarFallback>
                     </Avatar>
                   )}
-
                   <div className={`max-w-[75%] ${message.sender === "user" ? "order-first" : ""}`}>
                     <div
                       className={`rounded-2xl px-5 py-3 shadow-sm ${
@@ -307,7 +290,6 @@ const handleSendMessage = async () => {
                       {formatTime(message.timestamp)}
                     </div>
                   </div>
-
                   {message.sender === "user" && (
                     <Avatar className="h-8 w-8 mt-1 border border-blue-200 dark:border-blue-800">
                       <AvatarFallback className="bg-gradient-to-br from-blue-500 to-blue-600 text-white">
@@ -317,7 +299,6 @@ const handleSendMessage = async () => {
                   )}
                 </div>
               ))}
-
               {/* Modern Typing Indicator */}
               {isTyping && (
                 <div className="flex gap-4 justify-start">
@@ -343,7 +324,6 @@ const handleSendMessage = async () => {
               )}
             </div>
           </ScrollArea>
-
           {/* Quick Questions */}
           <div className="border-t border-gray-200/50 dark:border-gray-700/50 p-6 bg-gradient-to-r from-gray-50/50 to-white/50 dark:from-gray-800/50 dark:to-gray-900/50">
             <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">✨ Quick questions:</p>
@@ -353,7 +333,7 @@ const handleSendMessage = async () => {
                   key={index}
                   variant="outline"
                   size="sm"
-                  className="text-xs hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 dark:hover:bg-emerald-950/50 dark:hover:border-emerald-800 dark:hover:text-emerald-300 transition-all duration-200"
+                  className="text-xs hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 dark:hover:bg-emerald-950/50 dark:hover:border-emerald-800 dark:hover:text-emerald-300 transition-all duration-200 bg-transparent"
                   onClick={() => setInputMessage(question)}
                 >
                   {question}
@@ -361,7 +341,6 @@ const handleSendMessage = async () => {
               ))}
             </div>
           </div>
-
           {/* Modern Input Area */}
           <div className="border-t border-gray-200/50 dark:border-gray-700/50 p-6 bg-white/50 dark:bg-gray-900/50">
             <div className="flex gap-3">
@@ -394,7 +373,6 @@ const handleSendMessage = async () => {
           </div>
         </CardContent>
       </Card>
-
       {/* Modern AI Capabilities */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-emerald-50 to-emerald-100/30 dark:from-emerald-950/30 dark:to-emerald-900/20 hover:shadow-lg transition-all duration-300">
@@ -413,7 +391,6 @@ const handleSendMessage = async () => {
             </p>
           </CardContent>
         </Card>
-
         <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-blue-50 to-blue-100/30 dark:from-blue-950/30 dark:to-blue-900/20 hover:shadow-lg transition-all duration-300">
           <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent" />
           <CardHeader className="relative">
@@ -430,7 +407,6 @@ const handleSendMessage = async () => {
             </p>
           </CardContent>
         </Card>
-
         <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-purple-50 to-purple-100/30 dark:from-purple-950/30 dark:to-purple-900/20 hover:shadow-lg transition-all duration-300">
           <div className="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent" />
           <CardHeader className="relative">
