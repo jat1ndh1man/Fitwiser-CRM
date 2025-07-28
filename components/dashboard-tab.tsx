@@ -18,6 +18,7 @@ import {
   Filter,
   Loader2,
   IndianRupee,
+  RefreshCw,
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
@@ -124,18 +125,40 @@ const getIcon = (type: string) => {
   }
 }
 
+// Utility function to check if date is within range
+const isDateInRange = (dateStr: string, dateRange?: DateRange) => {
+  if (!dateStr || !dateRange?.from) return true
+  try {
+    const date = new Date(dateStr)
+    const from = dateRange.from
+    const to = dateRange.to || dateRange.from
+    return date >= from && date <= to
+  } catch {
+    return true
+  }
+}
+
 export function DashboardTab() {
   const router = useRouter()
+  
+  // Filter states
   const [date, setDate] = useState<DateRange | undefined>()
   const [statusFilter, setStatusFilter] = useState("all")
   const [sourceFilter, setSourceFilter] = useState("all")
+  const [cityFilter, setCityFilter] = useState("all")
+  const [priorityFilter, setPriorityFilter] = useState("all")
+  
+  // Data states
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [allLeads, setAllLeads] = useState<Lead[]>([])
   const [filteredLeads, setFilteredLeads] = useState<Lead[]>([])
   const [allUsers, setAllUsers] = useState<User[]>([])
   const [paymentLinks, setPaymentLinks] = useState<PaymentLink[]>([])
   const [manualPayments, setManualPayment] = useState<ManualPayment[]>([])
   const [analyticsData, setAnalyticsData] = useState<Record<string, AnalyticsData>>({})
+  
+  // Calculated states
   const [totalClients, setTotalClients] = useState(0)
   const [totalRevenue, setTotalRevenue] = useState(0)
   const [collectionAnalytics, setCollectionAnalytics] = useState({
@@ -150,208 +173,273 @@ export function DashboardTab() {
   })
   const [recentActivity, setRecentActivity] = useState<any[]>([])
 
-  // Store user role and assigned leads for filtering
+  // Available filter options
+  const [availableSources, setAvailableSources] = useState<string[]>([])
+  const [availableCities, setAvailableCities] = useState<string[]>([])
+  const [availableStatuses, setAvailableStatuses] = useState<string[]>([])
+  const [availablePriorities, setAvailablePriorities] = useState<string[]>([])
+
+  // User role and access control
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [userRole, setUserRole] = useState<string | null>(null)
   const [assignedLeadIds, setAssignedLeadIds] = useState<string[]>([])
   const [hasFullAccess, setHasFullAccess] = useState(false)
 
+  // Role constants
+  const FULL_ACCESS_ROLES = [
+    "b00060fe-175a-459b-8f72-957055ee8c55", // Superadmin
+    "46e786df-0272-4f22-aec2-56d2a517fa9d", // Admin
+    "11b93954-9a56-4ea5-a02c-15b731ee9dfb", // Sales manager
+  ]
+
   // Fetch data from Supabase
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
+  const fetchData = async (showRefreshLoader = false) => {
+    try {
+      if (showRefreshLoader) {
+        setRefreshing(true)
+      } else {
         setLoading(true)
+      }
 
-        // 1) Get the current user
-        const {
-          data: { user: currentUser },
-          error: userError,
-        } = await supabase.auth.getUser()
-        if (userError || !currentUser) throw userError || new Error("Not signed in")
-        const currentUserId = currentUser.id
-        setCurrentUserId(currentUserId)
+      // 1) Get the current user
+      const {
+        data: { user: currentUser },
+        error: userError,
+      } = await supabase.auth.getUser()
+      
+      if (userError || !currentUser) {
+        throw userError || new Error("Not signed in")
+      }
+      
+      const currentUserId = currentUser.id
+      setCurrentUserId(currentUserId)
 
-        // 2) Load their role_id
-        const { data: profile, error: profileError } = await supabase
-          .from("users")
-          .select("role_id")
-          .eq("id", currentUserId)
-          .single()
-        if (profileError || !profile) throw profileError || new Error("No profile row")
-        const roleId = profile.role_id
-        setUserRole(roleId)
+      // 2) Load their role_id
+      const { data: profile, error: profileError } = await supabase
+        .from("users")
+        .select("role_id")
+        .eq("id", currentUserId)
+        .single()
+        
+      if (profileError || !profile) {
+        throw profileError || new Error("No profile row")
+      }
+      
+      const roleId = profile.role_id
+      setUserRole(roleId)
 
-        // 3) Define full‑access roles
-        const FULL_ACCESS_ROLES = [
-          "b00060fe-175a-459b-8f72-957055ee8c55", // Superadmin
-          "46e786df-0272-4f22-aec2-56d2a517fa9d", // Admin
-          "11b93954-9a56-4ea5-a02c-15b731ee9dfb", // Sales manager
-        ]
+      // 3) Check access level
+      const isFullAccess = FULL_ACCESS_ROLES.includes(roleId)
+      setHasFullAccess(isFullAccess)
 
-        const isFullAccess = FULL_ACCESS_ROLES.includes(roleId)
-        setHasFullAccess(isFullAccess)
+      console.log("🏷️  User Access:", { currentUserId, roleId, isFullAccess })
 
-        console.log("🏷️  User Access:", { currentUserId, roleId, isFullAccess })
+      let assignedIds: string[] = []
 
-        let assignedIds: string[] = []
+      // 4) Build the leads query - ONLY filter leads for executives
+      let leadsQuery = supabase.from("leads").select("*").order("created_at", { ascending: false })
 
-        // 4) Build the leads query - ONLY filter leads for executives
-        let leadsQuery = supabase.from("leads").select("*").order("created_at", { ascending: false })
+      if (!isFullAccess) {
+        // Executive → restrict to their assigned leads
+        const { data: assignments = [], error: assignError } = await supabase
+          .from("lead_assignments")
+          .select("lead_id")
+          .eq("assigned_to", currentUserId)
+          
+        if (assignError) throw assignError
 
-        if (!isFullAccess) {
-          // Executive → restrict to their assigned leads
-          const { data: assignments = [], error: assignError } = await supabase
-            .from("lead_assignments")
-            .select("lead_id")
-            .eq("assigned_to", currentUserId)
-          if (assignError) throw assignError
+        assignedIds = assignments.map((a) => a.lead_id)
+        setAssignedLeadIds(assignedIds)
 
-          assignedIds = assignments.map((a) => a.lead_id)
-          setAssignedLeadIds(assignedIds)
-
-          if (assignedIds.length > 0) {
-            leadsQuery = leadsQuery.in("id", assignedIds)
-          } else {
-            // no assignments → force an empty result set
-            leadsQuery = leadsQuery.in("id", ["00000000-0000-0000-0000-000000000000"])
-          }
-        }
-
-        const { data: leadsData = [], error: leadsError } = await leadsQuery
-        if (leadsError) throw leadsError
-        setAllLeads(leadsData)
-        setFilteredLeads(leadsData)
-
-        // 5) Fetch all users to match with leads by email
-        const { data: usersData = [], error: usersError } = await supabase
-          .from("users")
-          .select("id, email, phone, first_name, last_name, role_id, created_at")
-        if (usersError) throw usersError
-        setAllUsers(usersData)
-
-        // 6) Fetch payments - DIFFERENT LOGIC FOR FULL ACCESS vs EXECUTIVES
-        let paymentLinksQuery = supabase.from("payment_links").select("*").order("created_at", { ascending: false })
-        let manualPaymentsQuery = supabase.from("manual_payment").select("*").order("created_at", { ascending: false })
-
-        if (isFullAccess) {
-          // SUPERADMIN/ADMIN: Get ALL payments - no filtering
-          console.log("🔓 Full access user - fetching ALL payments")
+        if (assignedIds.length > 0) {
+          leadsQuery = leadsQuery.in("id", assignedIds)
         } else {
-          // EXECUTIVE: Filter payments by leads assigned to them
-          console.log("🔒 Executive user - filtering payments by assigned leads")
-
-          // Create a mapping of lead emails to user IDs for assigned leads only
-          const leadEmailToUserMap = new Map<string, string>()
-          const leadPhoneToUserMap = new Map<string, string>()
-
-          leadsData.forEach((lead) => {
-            // Find matching user by email
-            const matchingUser = usersData.find(
-              (user) => user.email && lead.email && user.email.toLowerCase() === lead.email.toLowerCase(),
-            )
-            if (matchingUser) {
-              leadEmailToUserMap.set(lead.id, matchingUser.id)
-            }
-
-            // Also try to match by phone as fallback
-            if (!matchingUser && lead.phone_number) {
-              const phoneMatchingUser = usersData.find(
-                (user) => user.phone && lead.phone_number && user.phone === lead.phone_number,
-              )
-              if (phoneMatchingUser) {
-                leadPhoneToUserMap.set(lead.id, phoneMatchingUser.id)
-              }
-            }
-          })
-
-          // Get user IDs that correspond to assigned leads
-          const relevantUserIds = Array.from(
-            new Set([...Array.from(leadEmailToUserMap.values()), ...Array.from(leadPhoneToUserMap.values())]),
-          )
-
-          console.log("📧 Executive Lead to User mapping:", {
-            assignedLeads: leadsData.length,
-            emailMatches: leadEmailToUserMap.size,
-            phoneMatches: leadPhoneToUserMap.size,
-            relevantUserIds: relevantUserIds.length,
-          })
-
-          // Filter payments by user_ids that match assigned leads
-          if (relevantUserIds.length > 0) {
-            paymentLinksQuery = paymentLinksQuery.in("user_id", relevantUserIds)
-            manualPaymentsQuery = manualPaymentsQuery.in("user_id", relevantUserIds)
-          } else {
-            // No matching users found, return empty results
-            paymentLinksQuery = paymentLinksQuery.in("user_id", ["00000000-0000-0000-0000-000000000000"])
-            manualPaymentsQuery = manualPaymentsQuery.in("user_id", ["00000000-0000-0000-0000-000000000000"])
-          }
+          // no assignments → force an empty result set
+          leadsQuery = leadsQuery.in("id", ["00000000-0000-0000-0000-000000000000"])
         }
+      }
 
-        const [{ data: paymentLinksData = [], error: plError }, { data: manualPaymentsData = [], error: mpError }] =
-          await Promise.all([paymentLinksQuery, manualPaymentsQuery])
+      const { data: leadsData = [], error: leadsError } = await leadsQuery
+      if (leadsError) throw leadsError
+      
+      setAllLeads(leadsData)
 
-        if (plError) throw plError
-        if (mpError) throw mpError
+      // Extract unique filter options from leads data
+      const uniqueSources = [...new Set(leadsData.map(lead => lead.source).filter(Boolean))]
+      const uniqueCities = [...new Set(leadsData.map(lead => lead.city).filter(Boolean))]
+      const uniqueStatuses = [...new Set(leadsData.map(lead => lead.status).filter(Boolean))]
+      const uniquePriorities = [...new Set(leadsData.map(lead => lead.priority).filter(Boolean))]
 
-        setPaymentLinks(paymentLinksData)
-        setManualPayment(manualPaymentsData)
+      setAvailableSources(uniqueSources)
+      setAvailableCities(uniqueCities)
+      setAvailableStatuses(uniqueStatuses)
+      setAvailablePriorities(uniquePriorities)
 
-        // 7) Calculate total clients & revenue based on filtered data
-        const completedLinksForLeads = paymentLinksData.filter((p) => p.status === "completed")
-        const completedManualForLeads = manualPaymentsData.filter((p) => p.status === "completed")
+      // 5) Fetch all users to match with leads by email
+      const { data: usersData = [], error: usersError } = await supabase
+        .from("users")
+        .select("id, email, phone, first_name, last_name, role_id, created_at")
+        
+      if (usersError) throw usersError
+      setAllUsers(usersData)
 
-        const totalRevenueAmount = [...completedLinksForLeads, ...completedManualForLeads].reduce(
-          (sum, p) => sum + (p.amount || 0),
-          0,
+      // 6) Fetch payments with role-based filtering
+      let paymentLinksQuery = supabase.from("payment_links").select("*").order("created_at", { ascending: false })
+      let manualPaymentsQuery = supabase.from("manual_payment").select("*").order("created_at", { ascending: false })
+
+      if (isFullAccess) {
+        // SUPERADMIN/ADMIN: Get ALL payments - no filtering
+        console.log("🔓 Full access user - fetching ALL payments")
+      } else {
+        // EXECUTIVE: Filter payments by leads assigned to them
+        console.log("🔒 Executive user - filtering payments by assigned leads")
+
+        // Create a mapping of lead emails to user IDs for assigned leads only
+        const leadEmailToUserMap = new Map<string, string>()
+        const leadPhoneToUserMap = new Map<string, string>()
+
+        leadsData.forEach((lead) => {
+          // Find matching user by email
+          const matchingUser = usersData.find(
+            (user) => user.email && lead.email && user.email.toLowerCase() === lead.email.toLowerCase(),
+          )
+          if (matchingUser) {
+            leadEmailToUserMap.set(lead.id, matchingUser.id)
+          }
+
+          // Also try to match by phone as fallback
+          if (!matchingUser && lead.phone_number) {
+            const phoneMatchingUser = usersData.find(
+              (user) => user.phone && lead.phone_number && user.phone === lead.phone_number,
+            )
+            if (phoneMatchingUser) {
+              leadPhoneToUserMap.set(lead.id, phoneMatchingUser.id)
+            }
+          }
+        })
+
+        // Get user IDs that correspond to assigned leads
+        const relevantUserIds = Array.from(
+          new Set([...Array.from(leadEmailToUserMap.values()), ...Array.from(leadPhoneToUserMap.values())]),
         )
 
-        setTotalClients(leadsData.length)
-        setTotalRevenue(totalRevenueAmount)
-
-        console.log("💰 Revenue calculation:", {
-          userType: isFullAccess ? "FULL_ACCESS" : "EXECUTIVE",
-          leads: leadsData.length,
-          paymentLinks: paymentLinksData.length,
-          manualPayments: manualPaymentsData.length,
-          completedLinks: completedLinksForLeads.length,
-          completedManual: completedManualForLeads.length,
-          totalRevenue: totalRevenueAmount,
-          assignedLeads: assignedIds.length,
+        console.log("📧 Executive Lead to User mapping:", {
+          assignedLeads: leadsData.length,
+          emailMatches: leadEmailToUserMap.size,
+          phoneMatches: leadPhoneToUserMap.size,
+          relevantUserIds: relevantUserIds.length,
         })
-      } catch (error) {
-        console.error("Error fetching data:", error)
-      } finally {
-        setLoading(false)
+
+        // Filter payments by user_ids that match assigned leads
+        if (relevantUserIds.length > 0) {
+          paymentLinksQuery = paymentLinksQuery.in("user_id", relevantUserIds)
+          manualPaymentsQuery = manualPaymentsQuery.in("user_id", relevantUserIds)
+        } else {
+          // No matching users found, return empty results
+          paymentLinksQuery = paymentLinksQuery.in("user_id", ["00000000-0000-0000-0000-000000000000"])
+          manualPaymentsQuery = manualPaymentsQuery.in("user_id", ["00000000-0000-0000-0000-000000000000"])
+        }
       }
+
+      const [{ data: paymentLinksData = [], error: plError }, { data: manualPaymentsData = [], error: mpError }] =
+        await Promise.all([paymentLinksQuery, manualPaymentsQuery])
+
+      if (plError) throw plError
+      if (mpError) throw mpError
+
+      setPaymentLinks(paymentLinksData)
+      setManualPayment(manualPaymentsData)
+
+      // 7) Calculate total clients & revenue based on filtered data
+      const completedLinksForLeads = paymentLinksData.filter((p) => p.status === "completed")
+      const completedManualForLeads = manualPaymentsData.filter((p) => p.status === "completed")
+
+      const totalRevenueAmount = [...completedLinksForLeads, ...completedManualForLeads].reduce(
+        (sum, p) => sum + (p.amount || 0),
+        0,
+      )
+
+      setTotalClients(leadsData.length)
+      setTotalRevenue(totalRevenueAmount)
+
+      console.log("💰 Revenue calculation:", {
+        userType: isFullAccess ? "FULL_ACCESS" : "EXECUTIVE",
+        leads: leadsData.length,
+        paymentLinks: paymentLinksData.length,
+        manualPayments: manualPaymentsData.length,
+        completedLinks: completedLinksForLeads.length,
+        completedManual: completedManualForLeads.length,
+        totalRevenue: totalRevenueAmount,
+        assignedLeads: assignedIds.length,
+      })
+    } catch (error) {
+      console.error("Error fetching data:", error)
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
     }
+  }
+
+  // Initial data fetch
+  useEffect(() => {
     fetchData()
   }, [])
 
-  // Apply local filters whenever filter parameters change
+  // Enhanced filter application with multiple criteria
   useEffect(() => {
     let filtered = [...allLeads]
+
     // Apply status filter
     if (statusFilter !== "all") {
-      filtered = filtered.filter((lead) => lead.status?.toLowerCase() === statusFilter.toLowerCase())
+      filtered = filtered.filter((lead) => {
+        const leadStatus = lead.status?.toLowerCase()
+        const filterStatus = statusFilter.toLowerCase()
+        return leadStatus === filterStatus
+      })
     }
+
     // Apply source filter
     if (sourceFilter !== "all") {
-      filtered = filtered.filter((lead) => lead.source?.toLowerCase() === sourceFilter.toLowerCase())
+      filtered = filtered.filter((lead) => {
+        const leadSource = lead.source?.toLowerCase()
+        const filterSource = sourceFilter.toLowerCase()
+        return leadSource === filterSource
+      })
     }
+
+    // Apply city filter
+    if (cityFilter !== "all") {
+      filtered = filtered.filter((lead) => {
+        const leadCity = lead.city?.toLowerCase()
+        const filterCity = cityFilter.toLowerCase()
+        return leadCity === filterCity
+      })
+    }
+
+    // Apply priority filter
+    if (priorityFilter !== "all") {
+      filtered = filtered.filter((lead) => {
+        const leadPriority = lead.priority?.toLowerCase()
+        const filterPriority = priorityFilter.toLowerCase()
+        return leadPriority === filterPriority
+      })
+    }
+
     // Apply date range filter
-    if (date?.from && date?.to) {
+    if (date?.from || date?.to) {
       filtered = filtered.filter((lead) => {
-        const leadDate = new Date(lead.created_at)
-        return leadDate >= date.from! && leadDate <= date.to!
-      })
-    } else if (date?.from) {
-      filtered = filtered.filter((lead) => {
-        const leadDate = new Date(lead.created_at)
-        return leadDate >= date.from!
+        return isDateInRange(lead.created_at, date)
       })
     }
+
+    console.log("🔍 Filter applied:", {
+      original: allLeads.length,
+      filtered: filtered.length,
+      filters: { statusFilter, sourceFilter, cityFilter, priorityFilter, dateRange: !!date?.from }
+    })
+
     setFilteredLeads(filtered)
-  }, [allLeads, statusFilter, sourceFilter, date])
+  }, [allLeads, statusFilter, sourceFilter, cityFilter, priorityFilter, date])
 
   // Process analytics data based on filtered leads
   useEffect(() => {
@@ -365,58 +453,54 @@ export function DashboardTab() {
         {} as Record<string, number>,
       )
 
-      // Calculate changes (mock data for demonstration - you'd need historical data)
-      const mockChanges = {
-        new: 12,
-        hot: 8,
-        warm: -3,
-        cold: 5,
-        failed: -2,
-        totalClients: 15,
-        totalRevenue: 25000,
+      // Calculate changes compared to previous period (mock data for demonstration)
+      const calculateChange = (current: number) => {
+        // This should be calculated based on historical data
+        // For now, using mock changes
+        return Math.floor(Math.random() * 20) - 10
       }
 
       const processedAnalytics = {
         new: {
           count: statusCounts.new || 0,
-          change: mockChanges.new,
+          change: calculateChange(statusCounts.new || 0),
           color: "bg-emerald-500",
           textColor: "text-emerald-600",
         },
         hot: {
           count: statusCounts.hot || 0,
-          change: mockChanges.hot,
+          change: calculateChange(statusCounts.hot || 0),
           color: "bg-red-500",
           textColor: "text-red-600",
         },
         warm: {
           count: statusCounts.warm || 0,
-          change: mockChanges.warm,
+          change: calculateChange(statusCounts.warm || 0),
           color: "bg-orange-500",
           textColor: "text-orange-600",
         },
         cold: {
           count: statusCounts.cold || 0,
-          change: mockChanges.cold,
+          change: calculateChange(statusCounts.cold || 0),
           color: "bg-blue-500",
           textColor: "text-blue-600",
         },
         failed: {
           count: statusCounts.failed || 0,
-          change: mockChanges.failed,
+          change: calculateChange(statusCounts.failed || 0),
           color: "bg-gray-500",
           textColor: "text-gray-600",
         },
         totalClients: {
-          count: totalClients,
-          change: mockChanges.totalClients,
+          count: filteredLeads.length, // Use filtered count
+          change: calculateChange(filteredLeads.length),
           color: "bg-gradient-to-r from-purple-500 to-pink-500",
           textColor: "text-purple-600",
           isSpecial: true,
         },
         totalRevenue: {
           count: totalRevenue,
-          change: mockChanges.totalRevenue,
+          change: calculateChange(totalRevenue),
           color: "bg-gradient-to-r from-green-500 to-teal-500",
           textColor: "text-green-600",
           isSpecial: true,
@@ -424,7 +508,7 @@ export function DashboardTab() {
       }
       setAnalyticsData(processedAnalytics)
     }
-  }, [filteredLeads, totalClients, totalRevenue])
+  }, [filteredLeads, totalRevenue])
 
   // Process collection analytics - CORRECTLY FILTERED BY ROLE
   useEffect(() => {
@@ -512,6 +596,8 @@ export function DashboardTab() {
         priority: lead.priority?.toLowerCase() || "medium",
       }))
       setRecentActivity(activities)
+    } else {
+      setRecentActivity([])
     }
   }, [filteredLeads])
 
@@ -541,12 +627,22 @@ export function DashboardTab() {
     }
   }
 
-  // Clear filters function
+  // Enhanced clear filters function
   const handleClearFilters = () => {
     setStatusFilter("all")
     setSourceFilter("all")
+    setCityFilter("all")
+    setPriorityFilter("all")
     setDate(undefined)
   }
+
+  // Refresh data function
+  const handleRefreshData = () => {
+    fetchData(true)
+  }
+
+  // Check if any filters are active
+  const hasActiveFilters = statusFilter !== "all" || sourceFilter !== "all" || cityFilter !== "all" || priorityFilter !== "all" || date?.from
 
   if (loading) {
     return (
@@ -559,16 +655,33 @@ export function DashboardTab() {
 
   return (
     <div className="space-y-6">
-      {/* Enhanced Date Range Picker with Filters */}
+      {/* Enhanced Filters Section */}
       <Card className="border-0 shadow-xl bg-white/80 backdrop-blur-sm">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-emerald-700">
-            <Filter className="h-5 w-5" />
-            Advanced Filters
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-emerald-700">
+              <Filter className="h-5 w-5" />
+              Advanced Filters
+            </CardTitle>
+            <Button
+              onClick={handleRefreshData}
+              variant="outline"
+              size="sm"
+              disabled={refreshing}
+              className="border-emerald-200 hover:border-emerald-300 text-emerald-600 hover:text-emerald-700"
+            >
+              {refreshing ? (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              ) : (
+                <RefreshCw className="h-4 w-4 mr-2" />
+              )}
+              Refresh
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {/* Date Range Filter */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-700">Date Range</label>
               <Popover>
@@ -581,13 +694,13 @@ export function DashboardTab() {
                     {date?.from ? (
                       date.to ? (
                         <>
-                          {format(date.from, "LLL dd, y")} - {format(date.to, "LLL dd, y")}
+                          {format(date.from, "MMM dd")} - {format(date.to, "MMM dd")}
                         </>
                       ) : (
                         format(date.from, "LLL dd, y")
                       )
                     ) : (
-                      <span>Pick a date range</span>
+                      <span>Pick date range</span>
                     )}
                   </Button>
                 </PopoverTrigger>
@@ -603,6 +716,8 @@ export function DashboardTab() {
                 </PopoverContent>
               </Popover>
             </div>
+
+            {/* Status Filter */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-700">Status</label>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -611,14 +726,16 @@ export function DashboardTab() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="new">New</SelectItem>
-                  <SelectItem value="hot">Hot</SelectItem>
-                  <SelectItem value="warm">Warm</SelectItem>
-                  <SelectItem value="cold">Cold</SelectItem>
-                  <SelectItem value="failed">Failed</SelectItem>
+                  {availableStatuses.map(status => (
+                    <SelectItem key={status} value={status.toLowerCase()}>
+                      {status.charAt(0).toUpperCase() + status.slice(1)}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Source Filter */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-700">Source</label>
               <Select value={sourceFilter} onValueChange={setSourceFilter}>
@@ -627,18 +744,58 @@ export function DashboardTab() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Sources</SelectItem>
-                  <SelectItem value="website">Website</SelectItem>
-                  <SelectItem value="social">Social Media</SelectItem>
-                  <SelectItem value="referral">Referral</SelectItem>
-                  <SelectItem value="coldcall">Cold Call</SelectItem>
+                  {availableSources.map(source => (
+                    <SelectItem key={source} value={source.toLowerCase()}>
+                      {source.charAt(0).toUpperCase() + source.slice(1)}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
+
+            {/* City Filter */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">City</label>
+              <Select value={cityFilter} onValueChange={setCityFilter}>
+                <SelectTrigger className="border-emerald-200 hover:border-emerald-300">
+                  <SelectValue placeholder="All Cities" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Cities</SelectItem>
+                  {availableCities.map(city => (
+                    <SelectItem key={city} value={city.toLowerCase()}>
+                      {city}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Priority Filter */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">Priority</label>
+              <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+                <SelectTrigger className="border-emerald-200 hover:border-emerald-300">
+                  <SelectValue placeholder="All Priorities" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Priorities</SelectItem>
+                  {availablePriorities.map(priority => (
+                    <SelectItem key={priority} value={priority.toLowerCase()}>
+                      {priority.charAt(0).toUpperCase() + priority.slice(1)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Clear Filters Button */}
             <div className="flex items-end">
               <Button
                 onClick={handleClearFilters}
                 variant="outline"
                 className="w-full border-emerald-200 hover:border-emerald-300 text-emerald-600 hover:text-emerald-700 bg-transparent"
+                disabled={!hasActiveFilters}
               >
                 Clear Filters
               </Button>
@@ -648,7 +805,7 @@ export function DashboardTab() {
       </Card>
 
       {/* Filter Summary */}
-      {(statusFilter !== "all" || sourceFilter !== "all" || date?.from) && (
+      {hasActiveFilters && (
         <Card className="border-0 shadow-lg bg-gradient-to-r from-blue-50 to-emerald-50">
           <CardContent className="pt-4">
             <div className="flex items-center justify-between">
@@ -659,16 +816,26 @@ export function DashboardTab() {
                 </span>
                 {statusFilter !== "all" && (
                   <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs">
-                    Status: {statusFilter}
+                    Status: {statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}
                   </span>
                 )}
                 {sourceFilter !== "all" && (
                   <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs">
-                    Source: {sourceFilter}
+                    Source: {sourceFilter.charAt(0).toUpperCase() + sourceFilter.slice(1)}
+                  </span>
+                )}
+                {cityFilter !== "all" && (
+                  <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">
+                    City: {cityFilter.charAt(0).toUpperCase() + cityFilter.slice(1)}
+                  </span>
+                )}
+                {priorityFilter !== "all" && (
+                  <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs">
+                    Priority: {priorityFilter.charAt(0).toUpperCase() + priorityFilter.slice(1)}
                   </span>
                 )}
                 {date?.from && (
-                  <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">
+                  <span className="px-2 py-1 bg-pink-100 text-pink-700 rounded-full text-xs">
                     Date Range Applied
                   </span>
                 )}
@@ -712,7 +879,7 @@ export function DashboardTab() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className={`text-5xl font-bold ${data.isSpecial ? "text-slate-800" : data.textColor}`}>
+              <div className={`text-4xl font-bold ${data.isSpecial ? "text-slate-800" : data.textColor}`}>
                 {key === "totalRevenue" ? (
                   <div className="flex text-xl items-center">
                     <IndianRupee className="h-5 w-5 mr-1" />
@@ -722,6 +889,7 @@ export function DashboardTab() {
                   data.count
                 )}
               </div>
+           
             </CardContent>
           </Card>
         ))}
@@ -737,7 +905,6 @@ export function DashboardTab() {
             <CardTitle className="flex items-center gap-2 text-bold text-black">
               <IndianRupee className="h-5 w-5" />
               Collection Analytics
-              
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -763,7 +930,7 @@ export function DashboardTab() {
               </div>
               <div className="flex justify-between items-center p-3 bg-white/70 rounded-lg backdrop-blur-sm">
                 <span className="text-sm font-medium">Growth Rate</span>
-                <span className="font-bold text-emerald-600 flex items-center">
+                <span className={`font-bold flex items-center ${collectionAnalytics.growthRate >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                   <TrendingUp className="h-3 w-3 mr-1" />
                   {collectionAnalytics.growthRate.toFixed(1)}%
                 </span>
@@ -780,7 +947,6 @@ export function DashboardTab() {
             <CardTitle className="flex items-center gap-2 text-black">
               <AlertCircle className="h-5 w-5" />
               Outstanding Balance
-             
             </CardTitle>
           </CardHeader>
           <CardContent>
