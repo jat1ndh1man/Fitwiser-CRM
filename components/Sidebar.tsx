@@ -69,7 +69,7 @@ export default function Sidebar({
     { label: "Settings", icon: <Settings size={20} />, href: "/settings", routePath: "/settings" },
   ]
 
-  // Fetch user permissions
+  // Fetch user permissions 
   useEffect(() => {
     const fetchUserPermissions = async () => {
       try {

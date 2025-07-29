@@ -21,7 +21,8 @@ import {
   Calendar,
   IndianRupee,
   Loader2,
-  ChevronRight
+  ChevronRight,
+  UserCheck2Icon
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -70,6 +71,11 @@ const pageConfig = {
     title: "Settings",
     icon: <Settings size={24} />,
     description: "Configure your application preferences"
+  },
+  "/useraccess": {
+    title: "User Access Control",
+    icon: <UserCheck2Icon size={24} />,
+    description: "Configure user access preferences"
   }
 }
 

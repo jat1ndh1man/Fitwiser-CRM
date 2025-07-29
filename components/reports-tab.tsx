@@ -1,4 +1,3 @@
-
 "use client"
 import { useState, useEffect } from "react"
 import { createClient } from "@supabase/supabase-js"
@@ -30,11 +29,16 @@ import {
   XCircle,
   Activity,
   Loader2,
+  Info,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
 
-// Initialize Supabase client [^1]
+// Initialize Supabase client
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
 
 // Role constants - matching the reference pattern
@@ -145,6 +149,10 @@ export function ReportsTab() {
   const [sortField, setSortField] = useState<SortField | null>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>(null)
 
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage, setItemsPerPage] = useState(10)
+
   // Role-based access control - matching reference pattern
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
@@ -159,6 +167,7 @@ export function ReportsTab() {
   const [error, setError] = useState<string | null>(null)
   const [salesReports, setSalesReports] = useState<SalesReport[]>([])
   const [activationReports, setActivationReports] = useState<ActivationReport[]>([])
+  const [debugInfo, setDebugInfo] = useState<string>("")
 
   // Initialize user role and assignments - matching reference pattern
   useEffect(() => {
@@ -460,19 +469,22 @@ export function ReportsTab() {
     }
   }
 
-  // Fetch membership expiry data with role-based filtering - FIXED TO SHOW ALL ASSIGNED LEADS
+  // FIXED Fetch membership expiry data with better error handling and fallback logic
   const fetchExpiryReports = async () => {
     try {
       setLoading(true)
       setError(null)
+      setDebugInfo("")
 
       const filteredLeadIds = getFilteredLeadIds()
+      console.log("🔍 Fetching expiry reports for leads:", filteredLeadIds ? filteredLeadIds.length : "all")
 
       // First get all leads
       let leadsQuery = supabase.from("leads").select("*")
       if (filteredLeadIds !== null) {
         if (filteredLeadIds.length === 0) {
           setExpiryReports([])
+          setDebugInfo("No assigned leads found for this user.")
           return
         }
         leadsQuery = leadsQuery.in("id", filteredLeadIds)
@@ -481,14 +493,15 @@ export function ReportsTab() {
       const { data: leads, error: leadsError } = await leadsQuery
       if (leadsError) throw leadsError
 
+      console.log("📋 Found leads:", leads?.length || 0)
+
       // Get all users for name mapping
       const { data: users, error: usersError } = await supabase.from("users").select("id, email, first_name, last_name")
       if (usersError) throw usersError
 
-      // Get payment data
-      let paymentLinksQuery = supabase.from("payment_links").select("*").eq("status", "completed")
-
-      let manualPaymentsQuery = supabase.from("manual_payment").select("*").eq("status", "completed")
+      // Get ALL payment data (not just completed) to see what's available
+      let paymentLinksQuery = supabase.from("payment_links").select("*")
+      let manualPaymentsQuery = supabase.from("manual_payment").select("*")
 
       if (filteredLeadIds !== null && filteredLeadIds.length > 0) {
         paymentLinksQuery = paymentLinksQuery.in("lead_id", filteredLeadIds)
@@ -501,46 +514,115 @@ export function ReportsTab() {
       if (paymentLinksError) throw paymentLinksError
       if (manualPaymentsError) throw manualPaymentsError
 
+      console.log("💳 Payment links found:", paymentLinks?.length || 0)
+      console.log("💰 Manual payments found:", manualPayments?.length || 0)
+
       const currentDate = new Date()
 
-      // Create a map of payments by lead_id
+      // Create a map of payments by lead_id with better fallback logic
       const paymentsByLead = new Map()
 
-      // Process payment links
+      // Process payment links with more flexible expiry date handling
       ;(paymentLinks || []).forEach((payment: any) => {
-        if (!payment.lead_id || !payment.expires_at) return
+        if (!payment.lead_id) return
+        
+        // Create expiry date from multiple possible fields
+        let expiryDate = payment.expires_at || payment.plan_expiry || payment.expiry_date
+        
+        // If no expiry date, create one based on payment date + 30 days (example logic)
+        if (!expiryDate && payment.payment_date) {
+          const paymentDate = new Date(payment.payment_date)
+          paymentDate.setDate(paymentDate.getDate() + 30) // Add 30 days as default
+          expiryDate = paymentDate.toISOString()
+        }
+        
+        // If still no expiry date, create one based on created_at + 30 days
+        if (!expiryDate && payment.created_at) {
+          const createdDate = new Date(payment.created_at)
+          createdDate.setDate(createdDate.getDate() + 30)
+          expiryDate = createdDate.toISOString()
+        }
+
         if (!paymentsByLead.has(payment.lead_id)) {
           paymentsByLead.set(payment.lead_id, [])
         }
+        
         paymentsByLead.get(payment.lead_id).push({
           ...payment,
           type: "payment_link",
-          expiry_date: payment.expires_at,
+          expiry_date: expiryDate,
+          has_original_expiry: !!payment.expires_at
         })
       })
 
-      // Process manual payments
+      // Process manual payments with more flexible expiry date handling  
       ;(manualPayments || []).forEach((payment: any) => {
-        if (!payment.lead_id || !payment.plan_expiry) return
+        if (!payment.lead_id) return
+        
+        // Create expiry date from multiple possible fields
+        let expiryDate = payment.plan_expiry || payment.expires_at || payment.expiry_date
+        
+        // If no expiry date, create one based on payment date + 30 days
+        if (!expiryDate && payment.payment_date) {
+          const paymentDate = new Date(payment.payment_date)
+          paymentDate.setDate(paymentDate.getDate() + 30)
+          expiryDate = paymentDate.toISOString()
+        }
+        
+        // If still no expiry date, create one based on created_at + 30 days
+        if (!expiryDate && payment.created_at) {
+          const createdDate = new Date(payment.created_at)
+          createdDate.setDate(createdDate.getDate() + 30)
+          expiryDate = createdDate.toISOString()
+        }
+
         if (!paymentsByLead.has(payment.lead_id)) {
           paymentsByLead.set(payment.lead_id, [])
         }
+        
         paymentsByLead.get(payment.lead_id).push({
           ...payment,
-          type: "manual_payment",
-          expiry_date: payment.plan_expiry,
+          type: "manual_payment", 
+          expiry_date: expiryDate,
+          has_original_expiry: !!payment.plan_expiry
         })
       })
 
-      // Create expiry reports for ALL leads with active payments
+      console.log("🗂️ Payments mapped by lead:", paymentsByLead.size)
+
+      // Create expiry reports for ALL leads with payments (including estimated expiry dates)
       const expiryReports: ExpiryReport[] = []
+      let leadsWithPayments = 0
+      let leadsWithoutPayments = 0
+
       ;(leads || []).forEach((lead: any) => {
         const leadPayments = paymentsByLead.get(lead.id) || []
 
         if (leadPayments.length === 0) {
-          // Skip leads with no active payments for expiry report
+          leadsWithoutPayments++
+          // Still show leads without payments for expiry tracking
+          const user = users?.find((u) => u.email === lead.email || u.phone === lead.phone_number)
+          const firstName = user?.first_name || ""
+          const lastName = user?.last_name || ""
+          const clientName = `${firstName} ${lastName}`.trim() || lead.name || "Unknown User"
+
+          expiryReports.push({
+            id: `lead_no_payment_${lead.id}`,
+            clientName,
+            package: "No Active Package",
+            activationDate: lead.created_at,
+            expiryDate: "No Expiry Set",
+            daysRemaining: 0,
+            status: "No Active Membership",
+            renewalStatus: "Contact Required",
+            lastRenewalContact: null,
+            autoRenewal: false,
+            email: lead.email || "",
+          })
           return
         }
+
+        leadsWithPayments++
 
         // Find user by email or phone
         const user = users?.find((u) => u.email === lead.email || u.phone === lead.phone_number)
@@ -548,20 +630,23 @@ export function ReportsTab() {
         const lastName = user?.last_name || ""
         const clientName = `${firstName} ${lastName}`.trim() || lead.name || "Unknown User"
 
-        // Create expiry report for each payment with expiry date
+        // Create expiry report for each payment
         leadPayments.forEach((payment: any, index: number) => {
+          if (!payment.expiry_date) return // Skip if we couldn't determine expiry date
+
           const expiryDate = new Date(payment.expiry_date)
           const daysRemaining = Math.ceil((expiryDate.getTime() - currentDate.getTime()) / (1000 * 60 * 60 * 24))
 
           expiryReports.push({
             id: `${payment.type}_${payment.id}_${index}`,
             clientName,
-            package: payment.plan || payment.description || "Standard",
+            package: payment.plan || payment.description || "Standard Package",
             activationDate: payment.payment_date || payment.created_at,
             expiryDate: payment.expiry_date,
             daysRemaining,
             status: daysRemaining > 0 ? "Active" : "Expired",
-            renewalStatus: daysRemaining <= 30 ? "Follow-up Required" : "Not Contacted",
+            renewalStatus: daysRemaining <= 30 && daysRemaining > 0 ? "Follow-up Required" : 
+                          daysRemaining <= 0 ? "Urgent - Expired" : "Not Contacted",
             lastRenewalContact: null,
             autoRenewal: false,
             email: lead.email || "",
@@ -569,11 +654,15 @@ export function ReportsTab() {
         })
       })
 
+      const debugMessage = `Found ${leads?.length || 0} leads, ${leadsWithPayments} with payments, ${leadsWithoutPayments} without payments. Generated ${expiryReports.length} expiry records.`
+      console.log("📊", debugMessage)
+      setDebugInfo(debugMessage)
+
       console.log("Expiry reports generated:", expiryReports.length)
       setExpiryReports(expiryReports)
     } catch (err) {
       console.error("Error fetching expiry reports:", err)
-      setError("Failed to fetch expiry reports")
+      setError(`Failed to fetch expiry reports: ${err.message}`)
     } finally {
       setLoading(false)
     }
@@ -807,6 +896,9 @@ export function ReportsTab() {
       assignedLeadIds.length,
     )
 
+    // Reset pagination when changing report type
+    setCurrentPage(1)
+
     switch (activeReport) {
       case "balance":
         fetchBalanceReports()
@@ -827,6 +919,11 @@ export function ReportsTab() {
         break
     }
   }, [activeReport, userAccessInitialized, currentUserRole, assignedLeadIds])
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [searchTerm, statusFilter, counselorFilter, packageFilter, dateRange, sortField, sortDirection])
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -926,24 +1023,50 @@ export function ReportsTab() {
     setDateRange(undefined)
     setSortField(null)
     setSortDirection(null)
+    setCurrentPage(1)
   }
 
   const getReportData = () => {
+    let filteredData = []
+    
     switch (activeReport) {
       case "balance":
-        return getFilteredAndSortedData(balanceReports, ["clientName", "package", "status"])
+        filteredData = getFilteredAndSortedData(balanceReports, ["clientName", "package", "status"])
+        break
       case "sales":
-        return getFilteredAndSortedData(salesReports, ["clientName", "package", "counselor", "status", "source"])
+        filteredData = getFilteredAndSortedData(salesReports, ["clientName", "package", "counselor", "status", "source"])
+        break
       case "followup":
-        return getFilteredAndSortedData(followUpReports, ["leadName", "counselor", "status"])
+        filteredData = getFilteredAndSortedData(followUpReports, ["leadName", "counselor", "status"])
+        break
       case "conversion":
-        return getFilteredAndSortedData(conversionReports, ["leadName", "source", "counselor"])
+        filteredData = getFilteredAndSortedData(conversionReports, ["leadName", "source", "counselor"])
+        break
       case "activation":
-        return getFilteredAndSortedData(activationReports, ["clientName", "package", "counselor"])
+        filteredData = getFilteredAndSortedData(activationReports, ["clientName", "package", "counselor"])
+        break
       case "expiry":
-        return getFilteredAndSortedData(expiryReports, ["clientName", "package", "status"])
+        filteredData = getFilteredAndSortedData(expiryReports, ["clientName", "package", "status"])
+        break
       default:
-        return []
+        filteredData = []
+    }
+
+    // Calculate pagination
+    const totalItems = filteredData.length
+    const totalPages = Math.ceil(totalItems / itemsPerPage)
+    const startIndex = (currentPage - 1) * itemsPerPage
+    const endIndex = startIndex + itemsPerPage
+    const paginatedData = filteredData.slice(startIndex, endIndex)
+
+    return {
+      data: paginatedData,
+      totalItems,
+      totalPages,
+      currentPage,
+      itemsPerPage,
+      startIndex: startIndex + 1,
+      endIndex: Math.min(endIndex, totalItems)
     }
   }
 
@@ -1004,17 +1127,50 @@ export function ReportsTab() {
     }
   }
 
-  const reportData = getReportData()
+  const reportDataInfo = getReportData()
+  const reportData = reportDataInfo.data
   const stats = getReportStats()
 
-  // Export to CSV function
-  const exportToCSV = () => {
-    if (reportData.length === 0) return
+  // Pagination navigation functions
+  const goToFirstPage = () => setCurrentPage(1)
+  const goToPreviousPage = () => setCurrentPage(Math.max(1, currentPage - 1))
+  const goToNextPage = () => setCurrentPage(Math.min(reportDataInfo.totalPages, currentPage + 1))
+  const goToLastPage = () => setCurrentPage(reportDataInfo.totalPages)
+  const goToPage = (page: number) => setCurrentPage(Math.max(1, Math.min(reportDataInfo.totalPages, page)))
 
-    const headers = Object.keys(reportData[0]).join(",")
+  // Export to CSV function - exports all filtered data, not just current page
+  const exportToCSV = () => {
+    let allFilteredData = []
+    
+    switch (activeReport) {
+      case "balance":
+        allFilteredData = getFilteredAndSortedData(balanceReports, ["clientName", "package", "status"])
+        break
+      case "sales":
+        allFilteredData = getFilteredAndSortedData(salesReports, ["clientName", "package", "counselor", "status", "source"])
+        break
+      case "followup":
+        allFilteredData = getFilteredAndSortedData(followUpReports, ["leadName", "counselor", "status"])
+        break
+      case "conversion":
+        allFilteredData = getFilteredAndSortedData(conversionReports, ["leadName", "source", "counselor"])
+        break
+      case "activation":
+        allFilteredData = getFilteredAndSortedData(activationReports, ["clientName", "package", "counselor"])
+        break
+      case "expiry":
+        allFilteredData = getFilteredAndSortedData(expiryReports, ["clientName", "package", "status"])
+        break
+      default:
+        allFilteredData = []
+    }
+
+    if (allFilteredData.length === 0) return
+
+    const headers = Object.keys(allFilteredData[0]).join(",")
     const csvContent = [
       headers,
-      ...reportData.map((row) =>
+      ...allFilteredData.map((row) =>
         Object.values(row)
           .map((value) => (typeof value === "string" && value.includes(",") ? `"${value}"` : value))
           .join(","),
@@ -1054,20 +1210,17 @@ export function ReportsTab() {
         </Card>
       )}
 
-      {/* User Access Level Indicator */}
-      <Card className="border-0 shadow-sm bg-blue-50/50">
-        <CardContent className="pt-4">
-          <div className="flex items-center gap-2 text-blue-700">
-            <User className="h-4 w-4" />
-            <span className="text-sm">
-              Access Level: {hasFullAccess() ? "Full Access (All Data)" : "Executive Access (Assigned Leads Only)"}
-              {currentUserRole === EXECUTIVE_ROLE && (
-                <span className="ml-2 text-blue-600">({assignedLeadIds.length} assigned leads)</span>
-              )}
-            </span>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Debug Info Display for Expiry Reports */}
+      {activeReport === "expiry" && debugInfo && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-2 text-blue-700">
+              <Info className="h-4 w-4" />
+              <span className="text-sm">{debugInfo}</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Report Type Selector */}
       <Card className="border-0 shadow-xl bg-white/80 backdrop-blur-sm">
@@ -1207,6 +1360,7 @@ export function ReportsTab() {
                     <>
                       <SelectItem value="active">Active</SelectItem>
                       <SelectItem value="expired">Expired</SelectItem>
+                      <SelectItem value="no active membership">No Active Membership</SelectItem>
                     </>
                   )}
                 </SelectContent>
@@ -1225,6 +1379,7 @@ export function ReportsTab() {
                   <SelectItem value="premium">Premium</SelectItem>
                   <SelectItem value="enterprise">Enterprise</SelectItem>
                   <SelectItem value="no package">No Package</SelectItem>
+                  <SelectItem value="no active package">No Active Package</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1320,18 +1475,38 @@ export function ReportsTab() {
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-emerald-700">
             <FileText className="h-5 w-5" />
-            {activeReport.charAt(0).toUpperCase() + activeReport.slice(1)} Report ({reportData.length} records)
+            {activeReport.charAt(0).toUpperCase() + activeReport.slice(1)} Report 
+            <span className="text-sm font-normal text-slate-500">
+              ({reportDataInfo.totalItems} total records{reportDataInfo.totalItems > itemsPerPage ? `, showing ${reportDataInfo.startIndex}-${reportDataInfo.endIndex}` : ''})
+            </span>
           </CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-emerald-200 text-emerald-700 hover:bg-emerald-50 bg-transparent"
-            onClick={exportToCSV}
-            disabled={loading || reportData.length === 0}
-          >
-            <Download className="h-4 w-4 mr-2" />
-            Export CSV
-          </Button>
+          <div className="flex items-center gap-2">
+            <Select value={itemsPerPage.toString()} onValueChange={(value) => {
+              setItemsPerPage(Number(value))
+              setCurrentPage(1)
+            }}>
+              <SelectTrigger className="w-20 border-emerald-200 hover:border-emerald-300">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="5">5</SelectItem>
+                <SelectItem value="10">10</SelectItem>
+                <SelectItem value="25">25</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-emerald-200 text-emerald-700 hover:bg-emerald-50 bg-transparent"
+              onClick={exportToCSV}
+              disabled={loading || reportDataInfo.totalItems === 0}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Export CSV
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -1339,14 +1514,16 @@ export function ReportsTab() {
               <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
               <span className="ml-2 text-emerald-600">Loading data...</span>
             </div>
-          ) : reportData.length === 0 ? (
+          ) : reportDataInfo.totalItems === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-slate-500">
               <FileText className="h-12 w-12 mb-4 text-slate-300" />
               <h3 className="text-lg font-medium mb-2">No Data Available</h3>
               <p className="text-sm text-center">
                 {currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length === 0
                   ? "You don't have any assigned leads yet."
-                  : "No data found for the selected report type and filters."}
+                  : activeReport === "expiry" 
+                    ? "No membership expiry data found. This could mean: (1) No payments with expiry dates exist, (2) All payments lack expiry information, or (3) No leads have been assigned to you."
+                    : "No data found for the selected report type and filters."}
               </p>
             </div>
           ) : (
@@ -2084,44 +2261,54 @@ export function ReportsTab() {
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <CalendarIcon className="h-3 w-3 text-emerald-600" />
-                            {new Date(item.activationDate).toLocaleDateString()}
+                            {item.activationDate !== "No Expiry Set" ? new Date(item.activationDate).toLocaleDateString() : "N/A"}
                           </div>
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <CalendarIcon className="h-3 w-3 text-slate-500" />
-                            <span className={item.daysRemaining <= 0 ? "text-red-600 font-medium" : ""}>
-                              {new Date(item.expiryDate).toLocaleDateString()}
+                            <span className={item.daysRemaining <= 0 && item.expiryDate !== "No Expiry Set" ? "text-red-600 font-medium" : ""}>
+                              {item.expiryDate !== "No Expiry Set" ? new Date(item.expiryDate).toLocaleDateString() : "No Expiry Set"}
                             </span>
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge
-                            className={
-                              item.daysRemaining <= 0
-                                ? "bg-red-100 text-red-700 border-red-200"
-                                : item.daysRemaining <= 30
-                                  ? "bg-yellow-100 text-yellow-700 border-yellow-200"
-                                  : "bg-emerald-100 text-emerald-700 border-emerald-200"
-                            }
-                          >
-                            {item.daysRemaining <= 0
-                              ? `${Math.abs(item.daysRemaining)} days overdue`
-                              : `${item.daysRemaining} days`}
-                          </Badge>
+                          {item.expiryDate !== "No Expiry Set" ? (
+                            <Badge
+                              className={
+                                item.daysRemaining <= 0
+                                  ? "bg-red-100 text-red-700 border-red-200"
+                                  : item.daysRemaining <= 30
+                                    ? "bg-yellow-100 text-yellow-700 border-yellow-200"
+                                    : "bg-emerald-100 text-emerald-700 border-emerald-200"
+                              }
+                            >
+                              {item.daysRemaining <= 0
+                                ? `${Math.abs(item.daysRemaining)} days overdue`
+                                : `${item.daysRemaining} days`}
+                            </Badge>
+                          ) : (
+                            <Badge className="bg-gray-100 text-gray-700 border-gray-200">
+                              N/A
+                            </Badge>
+                          )}
                         </TableCell>
                         <TableCell>
                           <Badge
                             className={
                               item.status === "Active"
                                 ? "bg-emerald-100 text-emerald-700 border-emerald-200"
-                                : "bg-red-100 text-red-700 border-red-200"
+                                : item.status === "Expired"
+                                  ? "bg-red-100 text-red-700 border-red-200"
+                                  : "bg-gray-100 text-gray-700 border-gray-200"
                             }
                           >
                             {item.status === "Active" ? (
                               <Activity className="h-3 w-3 mr-1" />
-                            ) : (
+                            ) : item.status === "Expired" ? (
                               <XCircle className="h-3 w-3 mr-1" />
+                            ) : (
+                              <AlertTriangle className="h-3 w-3 mr-1" />
                             )}
                             {item.status}
                           </Badge>
@@ -2132,8 +2319,12 @@ export function ReportsTab() {
                               item.renewalStatus === "Contacted"
                                 ? "bg-blue-100 text-blue-700 border-blue-200"
                                 : item.renewalStatus === "Follow-up Required"
-                                  ? "bg-red-100 text-red-700 border-red-200"
-                                  : "bg-gray-100 text-gray-700 border-gray-200"
+                                  ? "bg-yellow-100 text-yellow-700 border-yellow-200"
+                                  : item.renewalStatus === "Urgent - Expired"
+                                    ? "bg-red-100 text-red-700 border-red-200"
+                                    : item.renewalStatus === "Contact Required"
+                                      ? "bg-orange-100 text-orange-700 border-orange-200"
+                                      : "bg-gray-100 text-gray-700 border-gray-200"
                             }
                           >
                             {item.renewalStatus}
@@ -2146,6 +2337,95 @@ export function ReportsTab() {
                 ))}
               </TableBody>
             </Table>
+          )}
+
+          {/* Pagination Controls */}
+          {!loading && reportDataInfo.totalItems > 0 && reportDataInfo.totalPages > 1 && (
+            <div className="flex items-center justify-between pt-4 border-t border-slate-200">
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <span>
+                  Showing {reportDataInfo.startIndex} to {reportDataInfo.endIndex} of {reportDataInfo.totalItems} results
+                </span>
+              </div>
+              
+              <div className="flex items-center gap-1">
+                {/* First Page */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={goToFirstPage}
+                  disabled={currentPage === 1}
+                  className="border-emerald-200 hover:border-emerald-300 hover:bg-emerald-50"
+                >
+                  <ChevronsLeft className="h-4 w-4" />
+                </Button>
+                
+                {/* Previous Page */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={goToPreviousPage}
+                  disabled={currentPage === 1}
+                  className="border-emerald-200 hover:border-emerald-300 hover:bg-emerald-50"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                
+                {/* Page Numbers */}
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: Math.min(5, reportDataInfo.totalPages) }, (_, i) => {
+                    let pageNum
+                    if (reportDataInfo.totalPages <= 5) {
+                      pageNum = i + 1
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1
+                    } else if (currentPage >= reportDataInfo.totalPages - 2) {
+                      pageNum = reportDataInfo.totalPages - 4 + i
+                    } else {
+                      pageNum = currentPage - 2 + i
+                    }
+                    
+                    return (
+                      <Button
+                        key={pageNum}
+                        variant={currentPage === pageNum ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => goToPage(pageNum)}
+                        className={
+                          currentPage === pageNum
+                            ? "bg-emerald-600 hover:bg-emerald-700"
+                            : "border-emerald-200 hover:border-emerald-300 hover:bg-emerald-50"
+                        }
+                      >
+                        {pageNum}
+                      </Button>
+                    )
+                  })}
+                </div>
+                
+                {/* Next Page */}
+                <Button
+                  variant="outline" 
+                  size="sm"
+                  onClick={goToNextPage}
+                  disabled={currentPage === reportDataInfo.totalPages}
+                  className="border-emerald-200 hover:border-emerald-300 hover:bg-emerald-50"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+                
+                {/* Last Page */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={goToLastPage}
+                  disabled={currentPage === reportDataInfo.totalPages}
+                  className="border-emerald-200 hover:border-emerald-300 hover:bg-emerald-50"
+                >
+                  <ChevronsRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>

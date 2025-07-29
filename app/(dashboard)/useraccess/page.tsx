@@ -176,14 +176,17 @@ const fetchData = async () => {
     if (permissionsError) throw permissionsError;
 
     // Process permissions data
-    const processedPermissions: PermissionWithRole[] = permissionsData.map(perm => ({
-      id: perm.id,
-      role_id: perm.role_id,
-      route_path: perm.route_path,
-      route_name: perm.route_name,
-      can_access: perm.can_access,
-      name: perm.user_roles?.name || 'Unknown'
-    }));
+   const processedPermissions: PermissionWithRole[] = permissionsData
+      // ⬇️ Skip any Settings records that might still exist
+      // .filter(perm => perm.route_path !== '/settings')
+      .map(perm => ({
+        id: perm.id,
+        role_id: perm.role_id,
+        route_path: perm.route_path,
+        route_name: perm.route_name,
+        can_access: perm.can_access,
+        name: perm.user_roles?.name || 'Unknown'
+      }));
 
     setPermissions(processedPermissions);
 
@@ -340,10 +343,10 @@ const fetchData = async () => {
 
   if (loading || !selectedRole) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="flex flex-col items-center space-y-4">
+      <div className="min-h-screen flex mt-20 justify-center ">
+        <div className="flex flex-col items-center space-y-3">
           <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-          <p className="text-gray-600">Loading user access controls...</p>
+          <p className="text-emerald-600">Loading user access controls...</p>
         </div>
       </div>
     );
@@ -353,13 +356,8 @@ const fetchData = async () => {
 
   return (
     <div className="min-h-screen">
-      <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        {/* Header */}
-        <header className="mb-8">
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">User Access Control</h1>
-          <p className="mt-2 text-sm text-gray-500">Manage user permissions and route access</p>
-        </header>
-
+      <div className="max-w-8xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+  
         {/* Notification */}
         {notification && (
           <div className={`mb-6 p-4 rounded-lg flex items-center shadow-md ${

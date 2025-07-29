@@ -510,80 +510,77 @@ export function DashboardTab() {
     }
   }, [filteredLeads, totalRevenue])
 
-  // Process collection analytics - CORRECTLY FILTERED BY ROLE
-  useEffect(() => {
-    if (paymentLinks.length > 0 || manualPayments.length > 0) {
-      // Use the payment data that's already correctly filtered based on user role
-      const allPayments = [
-        ...paymentLinks.filter((p) => p.status === "completed").map((p) => ({ ...p, source: "link" })),
-        ...manualPayments.filter((p) => p.status === "completed").map((p) => ({ ...p, source: "manual" })),
-      ]
+// Process collection analytics - now filtered by selected date range
+useEffect(() => {
+  if (paymentLinks.length === 0 && manualPayments.length === 0) return;
 
-      const totalCollected = allPayments.reduce((sum, payment) => sum + (payment.amount || 0), 0)
+  // 1️⃣ Filter payments to the selected date range:
+  const linksInRange = paymentLinks.filter(p =>
+    isDateInRange(p.payment_date || p.created_at, date)
+  );
+  const manualInRange = manualPayments.filter(p =>
+    isDateInRange(p.payment_date || p.created_at, date)
+  );
 
-      const now = new Date()
-      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-      const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
+  // 2️⃣ Separate completed vs pending:
+  const completed = [
+    ...linksInRange.filter(p => p.status === "completed").map(p => ({ ...p, source: "link" })),
+    ...manualInRange.filter(p => p.status === "completed").map(p => ({ ...p, source: "manual" })),
+  ];
+  const pending = [
+    ...linksInRange.filter(p => p.status === "pending"),
+    ...manualInRange.filter(p => p.status === "pending"),
+  ];
 
-      const thisWeekPayments = allPayments.filter((p) => new Date(p.payment_date || p.created_at) >= oneWeekAgo)
-      const lastWeekPayments = allPayments.filter((p) => {
-        const paymentDate = new Date(p.payment_date || p.created_at)
-        return paymentDate >= twoWeeksAgo && paymentDate < oneWeekAgo
-      })
+  // 3️⃣ Totals:
+  const totalCollected = completed.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const now = new Date().getTime();
+  const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const twoWeeksAgo = now - 14 * 24 * 60 * 60 * 1000;
 
-      const thisWeek = thisWeekPayments.reduce((sum, p) => sum + (p.amount || 0), 0)
-      const lastWeek = lastWeekPayments.reduce((sum, p) => sum + (p.amount || 0), 0)
-      const growthRate = lastWeek > 0 ? ((thisWeek - lastWeek) / lastWeek) * 100 : 0
+  // week‑over‑week for collected
+  const thisWeek = completed
+    .filter(p => new Date(p.payment_date || p.created_at).getTime() >= oneWeekAgo)
+    .reduce((sum, p) => sum + (p.amount || 0), 0);
+  const lastWeek = completed
+    .filter(p => {
+      const t = new Date(p.payment_date || p.created_at).getTime();
+      return t >= twoWeeksAgo && t < oneWeekAgo;
+    })
+    .reduce((sum, p) => sum + (p.amount || 0), 0);
+  const growthRate = lastWeek > 0 ? ((thisWeek - lastWeek) / lastWeek) * 100 : 0;
 
-      // Outstanding balance calculation - ALSO CORRECTLY FILTERED
-      const pendingPayments = [
-        ...paymentLinks.filter((p) => p.status === "pending"),
-        ...manualPayments.filter((p) => p.status === "pending"),
-      ]
-      const outstandingBalance = pendingPayments.reduce((sum, p) => sum + (p.amount || 0), 0)
+  // 30‑day overdue & 7‑day due‑soon (all pending)
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+  const sevenDaysAhead = now + 7 * 24 * 60 * 60 * 1000;
+  const overdue = pending
+    .filter(p => new Date(p.created_at).getTime() < thirtyDaysAgo)
+    .reduce((sum, p) => sum + (p.amount || 0), 0);
+  const dueSoon = pending
+    .filter(p => {
+      const exp = new Date(p.expires_at || p.plan_expiry || p.created_at).getTime();
+      return exp > now && exp <= sevenDaysAhead;
+    })
+    .reduce((sum, p) => sum + (p.amount || 0), 0);
+  const outstandingBalance = pending.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const recoveryRate =
+    totalCollected + outstandingBalance > 0
+      ? (totalCollected / (totalCollected + outstandingBalance)) * 100
+      : 0;
 
-      // Calculate overdue and due soon based on filtered data
-      const now_timestamp = now.getTime()
-      const thirtyDaysAgo = now_timestamp - 30 * 24 * 60 * 60 * 1000
-      const sevenDaysFromNow = now_timestamp + 7 * 24 * 60 * 60 * 1000
+  // 4️⃣ Update state:
+  setCollectionAnalytics({
+    totalCollected,
+    thisWeek,
+    lastWeek,
+    growthRate,
+    outstandingBalance,
+    overdue,
+    dueSoon,
+    recoveryRate,
+  });
+}, [paymentLinks, manualPayments, date, userRole, hasFullAccess]);
 
-      const overduePayments = pendingPayments.filter((p) => {
-        const createdDate = new Date(p.created_at).getTime()
-        return createdDate < thirtyDaysAgo
-      })
-
-      const dueSoonPayments = pendingPayments.filter((p) => {
-        const expiryDate = new Date(p.expires_at || p.plan_expiry || p.created_at).getTime()
-        return expiryDate <= sevenDaysFromNow && expiryDate > now_timestamp
-      })
-
-      const overdue = overduePayments.reduce((sum, p) => sum + (p.amount || 0), 0)
-      const dueSoon = dueSoonPayments.reduce((sum, p) => sum + (p.amount || 0), 0)
-      const recoveryRate = totalCollected > 0 ? (totalCollected / (totalCollected + outstandingBalance)) * 100 : 0
-
-      setCollectionAnalytics({
-        totalCollected,
-        thisWeek,
-        lastWeek,
-        growthRate,
-        outstandingBalance,
-        overdue,
-        dueSoon,
-        recoveryRate,
-      })
-
-      console.log("💰 Collection analytics updated:", {
-        userType: hasFullAccess ? "FULL_ACCESS" : "EXECUTIVE",
-        totalCollected,
-        outstandingBalance,
-        paymentsCount: allPayments.length,
-        pendingCount: pendingPayments.length,
-        overdueCount: overduePayments.length,
-        dueSoonCount: dueSoonPayments.length,
-        userRole,
-      })
-    }
-  }, [paymentLinks, manualPayments, userRole, hasFullAccess])
 
   // Process recent activity based on filtered leads
   useEffect(() => {
