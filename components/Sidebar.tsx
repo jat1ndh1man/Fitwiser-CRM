@@ -64,7 +64,7 @@ export default function Sidebar({
     { label: "Leads Information", icon: <UserCheck size={20} />, href: "/lead-information", routePath: "/lead-information" },
     { label: "Lead Assignment", icon: <UserPlus size={20} />, href: "/lead-assignment", routePath: "/lead-assignment" },
     { label: "Executive Information", icon: <UserRoundSearch size={20} />, href: "/executives", routePath: "/executives" },
-    { label: "Talk to your data", icon: <MessageSquare size={20} />, href: "/ttyd", routePath: "/ttyd" },
+    { label: "Talk to your data (Beta)", icon: <MessageSquare size={20} />, href: "/ttyd", routePath: "/ttyd" },
     { label: "User Access", icon: <UserCheck2 size={20} />, href: "/useraccess", routePath: "/useraccess" },
     { label: "Settings", icon: <Settings size={20} />, href: "/settings", routePath: "/settings" },
   ]

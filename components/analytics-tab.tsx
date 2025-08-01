@@ -52,21 +52,7 @@ const supabase = createClient(
 )
 
 // Static data for follow-up and renewal trends
-const missedFollowUpAnalysis = [
-  { counselor: "Sarah Johnson", total: 45, missed: 8, rate: 17.8, impact: "Low" },
-  { counselor: "Mike Wilson", total: 52, missed: 12, rate: 23.1, impact: "Medium" },
-  { counselor: "Lisa Brown", total: 38, missed: 15, rate: 39.5, impact: "High" },
-  { counselor: "John Davis", total: 42, missed: 18, rate: 42.9, impact: "High" },
-]
 
-const renewalTrends = [
-  { month: "Jan", renewals: 32, revenue: 80000, rate: 71.1 },
-  { month: "Feb", renewals: 38, revenue: 95000, rate: 73.1 },
-  { month: "Mar", renewals: 51, revenue: 127500, rate: 76.1 },
-  { month: "Apr", renewals: 56, revenue: 140000, rate: 78.9 },
-  { month: "May", renewals: 62, revenue: 155000, rate: 79.5 },
-  { month: "Jun", renewals: 69, revenue: 172500, rate: 80.2 },
-]
 
 export function AnalyticsTab() {
   // Filter states
@@ -125,6 +111,23 @@ export function AnalyticsTab() {
     coachWise: [] as Array<{ coach: string; total: number; renewed: number; rate: number }>,
     monthWise: [] as Array<{ month: string; total: number; renewed: number; rate: number }>,
   })
+  // Add this state after your existing renewalAnalytics state
+const [renewalTrendsData, setRenewalTrendsData] = useState({
+  totalRenewals: 0,
+  totalRevenue: 0,
+  avgRenewalRate: 0,
+  growthRate: 0,
+  monthlyTrends: [] as Array<{ month: string; renewals: number; revenue: number; rate: number }>,
+})
+
+// Add this state for missed follow-ups (if you want to make it dynamic too)
+const [missedFollowUpData, setMissedFollowUpData] = useState<Array<{
+  counselor: string;
+  total: number;
+  missed: number;
+  rate: number;
+  impact: string;
+}>>([])
   const [sourceAnalysisData, setSourceAnalysisData] = useState<{ source: string; count: number; revenue: number; conversion: number }[]>([])
 
   // Utility functions
@@ -884,111 +887,311 @@ export function AnalyticsTab() {
     fetchSourceData()
   }, [activeAnalytic, currentUserRole, assignedLeadIds, sourceFilter, dateRange, timeFilter, searchTerm])
 
-  // Renewal Analysis
-  useEffect(() => {
-    if (activeAnalytic !== "renewals") return
+// Renewal Analysis - Updated to use plan_expiry and calculate trends
+useEffect(() => {
+  if (activeAnalytic !== "renewals" && activeAnalytic !== "renewaltrends") return
 
-    const fetchRenewalData = async () => {
-      try {
-        let manualQuery = supabase.from("manual_payment").select("amount, payment_date, lead_id")
-        let linksQuery = supabase.from("payment_links").select("amount, payment_date, lead_id")
-        
-        if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
-          manualQuery = manualQuery.in('lead_id', assignedLeadIds)
-          linksQuery = linksQuery.in('lead_id', assignedLeadIds)
+  const fetchRenewalData = async () => {
+    try {
+      // Fetch payments with plan_expiry dates
+      let manualQuery = supabase.from("manual_payment").select("amount, payment_date, lead_id, plan_expiry, plan")
+      let linksQuery = supabase.from("payment_links").select("amount, payment_date, lead_id, plan_expiry, plan")
+      
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        manualQuery = manualQuery.in('lead_id', assignedLeadIds)
+        linksQuery = linksQuery.in('lead_id', assignedLeadIds)
+      }
+      
+      const [{ data: manualPayments }, { data: paymentLinks }] = await Promise.all([manualQuery, linksQuery])
+      const allPayments = [...(manualPayments || []), ...(paymentLinks || [])]
+      const filteredPayments = applyPaymentFilters(allPayments).filter(p => p.payment_date && p.plan_expiry)
+
+      // Get leads data for source mapping
+      let leadsQuery = supabase.from("leads").select("id, email, source, created_at")
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        leadsQuery = leadsQuery.in('id', assignedLeadIds)
+      }
+      
+      const { data: leads } = await leadsQuery
+      const filteredLeads = applyLeadFilters(leads || [])
+
+      // Create mappings
+      const leadSourceMap: Record<string, string> = {}
+      const leadEmailMap: Record<string, string> = {}
+      filteredLeads.forEach((lead) => {
+        leadSourceMap[lead.id] = lead.source || "Unknown"
+        leadEmailMap[lead.id] = lead.email || ""
+      })
+
+      // Get coach assignments
+      const { data: assignments } = await supabase.from("lead_assignments").select("lead_id, assigned_to")
+      const { data: users } = await supabase.from("users").select("id, first_name, last_name")
+      
+      const leadCoachMap: Record<string, string> = {}
+      const userMap: Record<string, string> = {}
+      
+      users?.forEach(user => {
+        userMap[user.id] = `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Unknown'
+      })
+      
+      assignments?.forEach(assignment => {
+        leadCoachMap[assignment.lead_id] = userMap[assignment.assigned_to] || 'Unknown'
+      })
+
+      // Group payments by user and sort by payment date
+      const userPaymentsMap: Record<string, any[]> = {}
+      filteredPayments.forEach(payment => {
+        if (!userPaymentsMap[payment.lead_id]) {
+          userPaymentsMap[payment.lead_id] = []
         }
-        
-        const [{ data: manualPayments }, { data: paymentLinks }] = await Promise.all([manualQuery, linksQuery])
-        const allPayments = [...(manualPayments || []), ...(paymentLinks || [])]
-        const filteredPayments = applyPaymentFilters(allPayments)
-
-        let leadsQuery = supabase.from("leads").select("id, email, source, created_at")
-        if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
-          leadsQuery = leadsQuery.in('id', assignedLeadIds)
-        }
-        
-        const { data: leads } = await leadsQuery
-        const filteredLeads = applyLeadFilters(leads || [])
-
-        const leadSourceMap: Record<string, string> = {}
-        filteredLeads.forEach((lead) => {
-          leadSourceMap[lead.id] = lead.source || "Unknown"
+        userPaymentsMap[payment.lead_id].push({
+          ...payment,
+          payment_date: new Date(payment.payment_date),
+          plan_expiry: new Date(payment.plan_expiry)
         })
+      })
 
-        const userPaymentsMap: Record<string, { total: number; renewed: number; lastPaymentDate: Date }> = {}
-        filteredPayments.forEach((payment) => {
-          const { lead_id, payment_date, amount } = payment
-          if (!payment_date) return
+      // Sort payments by date for each user
+      Object.keys(userPaymentsMap).forEach(leadId => {
+        userPaymentsMap[leadId].sort((a, b) => a.payment_date.getTime() - b.payment_date.getTime())
+      })
+
+      // Identify renewals and collect data
+      const renewalData: Array<{
+        leadId: string,
+        source: string,
+        coach: string,
+        renewalDate: Date,
+        isRenewal: boolean,
+        amount: number
+      }> = []
+
+      Object.entries(userPaymentsMap).forEach(([leadId, payments]) => {
+        if (payments.length < 2) {
+          // Only one payment, not a renewal candidate
+          renewalData.push({
+            leadId,
+            source: leadSourceMap[leadId] || "Unknown",
+            coach: leadCoachMap[leadId] || "Unknown",
+            renewalDate: payments[0].payment_date,
+            isRenewal: false,
+            amount: payments[0].amount || 0
+          })
+          return
+        }
+
+        // Check each payment after the first one
+        for (let i = 1; i < payments.length; i++) {
+          const currentPayment = payments[i]
+          const previousPayment = payments[i - 1]
           
-          const paymentDate = new Date(payment_date)
-          const userPayments = userPaymentsMap[lead_id] || { total: 0, renewed: 0, lastPaymentDate: new Date(0) }
+          // Check if current payment was made after previous plan expired
+          const isRenewal = currentPayment.payment_date > previousPayment.plan_expiry
+          
+          renewalData.push({
+            leadId,
+            source: leadSourceMap[leadId] || "Unknown",
+            coach: leadCoachMap[leadId] || "Unknown",
+            renewalDate: currentPayment.payment_date,
+            isRenewal,
+            amount: currentPayment.amount || 0
+          })
+        }
+      })
 
-          userPayments.total += amount || 0
-          const isRenewal = paymentDate > userPayments.lastPaymentDate
+      // Aggregate data by source
+      const sourceAgg: Record<string, { total: number; renewed: number }> = {}
+      renewalData.forEach(data => {
+        if (!sourceAgg[data.source]) {
+          sourceAgg[data.source] = { total: 0, renewed: 0 }
+        }
+        sourceAgg[data.source].total += 1
+        if (data.isRenewal) {
+          sourceAgg[data.source].renewed += 1
+        }
+      })
 
-          if (isRenewal) {
-            userPayments.renewed += 1
-            userPayments.lastPaymentDate = paymentDate
-          }
+      // Aggregate data by coach
+      const coachAgg: Record<string, { total: number; renewed: number }> = {}
+      renewalData.forEach(data => {
+        if (!coachAgg[data.coach]) {
+          coachAgg[data.coach] = { total: 0, renewed: 0 }
+        }
+        coachAgg[data.coach].total += 1
+        if (data.isRenewal) {
+          coachAgg[data.coach].renewed += 1
+        }
+      })
 
-          userPaymentsMap[lead_id] = userPayments
-        })
+      // Aggregate data by month for trends
+      const monthAgg: Record<string, { total: number; renewed: number; revenue: number }> = {}
+      renewalData.forEach(data => {
+        const month = data.renewalDate.toLocaleString("default", { month: "short" })
+        if (!monthAgg[month]) {
+          monthAgg[month] = { total: 0, renewed: 0, revenue: 0 }
+        }
+        monthAgg[month].total += 1
+        if (data.isRenewal) {
+          monthAgg[month].renewed += 1
+          monthAgg[month].revenue += data.amount
+        }
+      })
 
-        const renewalBySource: Record<string, { total: number; renewed: number }> = {}
-        const renewalByCoach: Record<string, { total: number; renewed: number }> = {}
-        const renewalByMonth: Record<string, { total: number; renewed: number }> = {}
+      // Calculate rates and format results
+      const calculateRate = (renewed: number, total: number) => 
+        total > 0 ? parseFloat(((renewed / total) * 100).toFixed(1)) : 0
 
-        Object.keys(userPaymentsMap).forEach((lead_id) => {
-          const { total, renewed } = userPaymentsMap[lead_id]
-          const source = leadSourceMap[lead_id] || "Unknown"
-          const coach = "Default Coach"
-          const month = new Date().toLocaleString("default", { month: "short" })
+      const sourceWise = Object.entries(sourceAgg).map(([source, { total, renewed }]) => ({
+        source,
+        total,
+        renewed,
+        rate: calculateRate(renewed, total),
+      }))
 
-          renewalBySource[source] = renewalBySource[source] || { total: 0, renewed: 0 }
-          renewalByCoach[coach] = renewalByCoach[coach] || { total: 0, renewed: 0 }
-          renewalByMonth[month] = renewalByMonth[month] || { total: 0, renewed: 0 }
+      const coachWise = Object.entries(coachAgg).map(([coach, { total, renewed }]) => ({
+        coach,
+        total,
+        renewed,
+        rate: calculateRate(renewed, total),
+      }))
 
-          renewalBySource[source].total += total
-          renewalBySource[source].renewed += renewed
-          renewalByCoach[coach].total += total
-          renewalByCoach[coach].renewed += renewed
-          renewalByMonth[month].total += total
-          renewalByMonth[month].renewed += renewed
-        })
-
-        const calculateRate = (renewed: number, total: number) => 
-          total > 0 ? parseFloat(((renewed / total) * 100).toFixed(1)) : 0
-
-        const sourceWise = Object.entries(renewalBySource).map(([source, { total, renewed }]) => ({
-          source,
-          total,
-          renewed,
-          rate: calculateRate(renewed, total),
-        }))
-
-        const coachWise = Object.entries(renewalByCoach).map(([coach, { total, renewed }]) => ({
-          coach,
-          total,
-          renewed,
-          rate: calculateRate(renewed, total),
-        }))
-
-        const monthWise = Object.entries(renewalByMonth).map(([month, { total, renewed }]) => ({
+      const monthOrder = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+      const monthWise = Object.entries(monthAgg)
+        .sort(([a], [b]) => monthOrder.indexOf(a) - monthOrder.indexOf(b))
+        .map(([month, { total, renewed }]) => ({
           month,
           total,
           renewed,
           rate: calculateRate(renewed, total),
         }))
 
-        setRenewalAnalytics({ sourceWise, coachWise, monthWise })
-      } catch (error) {
-        console.error('Error in renewals analysis:', error)
-        setRenewalAnalytics({ sourceWise: [], coachWise: [], monthWise: [] })
-      }
-    }
+      setRenewalAnalytics({ sourceWise, coachWise, monthWise })
 
-    fetchRenewalData()
-  }, [activeAnalytic, currentUserRole, assignedLeadIds, sourceFilter, packageFilter, dateRange, timeFilter, searchTerm])
+      // Calculate renewal trends data
+      const totalRenewals = renewalData.filter(d => d.isRenewal).length
+      const totalRevenue = renewalData.filter(d => d.isRenewal).reduce((sum, d) => sum + d.amount, 0)
+      const totalCandidates = renewalData.length
+      const avgRenewalRate = calculateRate(totalRenewals, totalCandidates)
+
+      // Calculate growth rate (last month vs previous month)
+      const monthlyTrends = Object.entries(monthAgg)
+        .sort(([a], [b]) => monthOrder.indexOf(a) - monthOrder.indexOf(b))
+        .map(([month, { total, renewed, revenue }]) => ({
+          month,
+          renewals: renewed,
+          revenue,
+          rate: calculateRate(renewed, total),
+        }))
+
+      const lastMonthIdx = monthlyTrends.length - 1
+      const prevMonthIdx = Math.max(0, lastMonthIdx - 1)
+      const growthRate = lastMonthIdx > 0 && monthlyTrends[prevMonthIdx].renewals > 0
+        ? parseFloat(((monthlyTrends[lastMonthIdx].renewals - monthlyTrends[prevMonthIdx].renewals) / monthlyTrends[prevMonthIdx].renewals * 100).toFixed(1))
+        : 0
+
+      setRenewalTrendsData({
+        totalRenewals,
+        totalRevenue,
+        avgRenewalRate,
+        growthRate,
+        monthlyTrends,
+      })
+
+    } catch (error) {
+      console.error('Error in renewals analysis:', error)
+      setRenewalAnalytics({ sourceWise: [], coachWise: [], monthWise: [] })
+      setRenewalTrendsData({
+        totalRenewals: 0,
+        totalRevenue: 0,
+        avgRenewalRate: 0,
+        growthRate: 0,
+        monthlyTrends: [],
+      })
+    }
+  }
+
+  fetchRenewalData()
+}, [activeAnalytic, currentUserRole, assignedLeadIds, sourceFilter, packageFilter, dateRange, timeFilter, searchTerm])
+
+// Missed Follow-up Analysis (add this useEffect if you want dynamic follow-up data)
+useEffect(() => {
+  if (activeAnalytic !== "followup") return
+
+  const fetchFollowUpData = async () => {
+    try {
+      // This assumes you have a follow_ups table with columns: lead_id, assigned_to, due_date, completed_date, status
+      let followUpsQuery = supabase.from("follow_ups").select("lead_id, assigned_to, due_date, completed_date, status")
+      
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        followUpsQuery = followUpsQuery.in('lead_id', assignedLeadIds)
+      }
+      
+      const { data: followUps } = await followUpsQuery
+      
+      if (!followUps) {
+        setMissedFollowUpData([])
+        return
+      }
+
+      // Get user names
+      const { data: users } = await supabase.from("users").select("id, first_name, last_name")
+      const userMap: Record<string, string> = {}
+      users?.forEach(user => {
+        userMap[user.id] = `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Unknown'
+      })
+
+      // Filter follow-ups based on time filters
+      const filteredFollowUps = followUps.filter(followUp => {
+        if (followUp.due_date && !isDateInTimeFilter(followUp.due_date, timeFilter)) return false
+        if (followUp.due_date && !isDateInRange(followUp.due_date, dateRange)) return false
+        return true
+      })
+
+      // Aggregate by counselor
+      const counselorAgg: Record<string, { total: number; missed: number }> = {}
+      
+      filteredFollowUps.forEach(followUp => {
+        const counselorName = userMap[followUp.assigned_to] || 'Unassigned'
+        
+        if (!counselorAgg[counselorName]) {
+          counselorAgg[counselorName] = { total: 0, missed: 0 }
+        }
+        
+        counselorAgg[counselorName].total += 1
+        
+        // Consider missed if due date has passed and not completed
+        const dueDate = new Date(followUp.due_date)
+        const now = new Date()
+        const isMissed = dueDate < now && (!followUp.completed_date && followUp.status !== 'completed')
+        
+        if (isMissed) {
+          counselorAgg[counselorName].missed += 1
+        }
+      })
+
+      // Format results
+      const result = Object.entries(counselorAgg).map(([counselor, { total, missed }]) => {
+        const rate = total > 0 ? parseFloat(((missed / total) * 100).toFixed(1)) : 0
+        const impact = rate > 30 ? "High" : rate > 15 ? "Medium" : "Low"
+        
+        return {
+          counselor,
+          total,
+          missed,
+          rate,
+          impact,
+        }
+      })
+
+      setMissedFollowUpData(result)
+    } catch (error) {
+      console.error('Error in follow-up analysis:', error)
+      setMissedFollowUpData([])
+    }
+  }
+
+  fetchFollowUpData()
+}, [activeAnalytic, currentUserRole, assignedLeadIds, dateRange, timeFilter, searchTerm])
 
   const clearFilters = () => {
     setSearchTerm("")
@@ -1799,66 +2002,66 @@ export function AnalyticsTab() {
         </div>
       )}
 
-      {activeAnalytic === "followup" && (
-        <div className="space-y-6">
-          <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-            <CardHeader>
-              <CardTitle className="text-emerald-700">Missed Follow-up Analysis</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={missedFollowUpAnalysis}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="counselor" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 12 }} />
-                  <Tooltip />
-                  <Bar dataKey="total" fill="#10b981" name="Total Follow-ups" />
-                  <Bar dataKey="missed" fill="#ef4444" name="Missed Follow-ups" />
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
+{activeAnalytic === "followup" && (
+  <div className="space-y-6">
+    <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+      <CardHeader>
+        <CardTitle className="text-emerald-700">Missed Follow-up Analysis</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={300}>
+          <BarChart data={missedFollowUpData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="counselor" tick={{ fontSize: 10 }} />
+            <YAxis tick={{ fontSize: 12 }} />
+            <Tooltip />
+            <Bar dataKey="total" fill="#10b981" name="Total Follow-ups" />
+            <Bar dataKey="missed" fill="#ef4444" name="Missed Follow-ups" />
+          </BarChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {missedFollowUpAnalysis.map((counselor, index) => (
-              <Card key={index} className="border-0 shadow-lg bg-gradient-to-br from-red-50 to-orange-50">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-red-700 flex items-center gap-2">
-                    <AlertTriangle className="h-4 w-4" />
-                    {counselor.counselor}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Total:</span>
-                      <span className="font-semibold">{counselor.total}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Missed:</span>
-                      <span className="font-semibold text-red-600">{counselor.missed}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Miss Rate:</span>
-                      <Badge
-                        className={
-                          counselor.impact === "High"
-                            ? "bg-red-100 text-red-700"
-                            : counselor.impact === "Medium"
-                              ? "bg-yellow-100 text-yellow-700"
-                              : "bg-green-100 text-green-700"
-                        }
-                      >
-                        {counselor.rate}%
-                      </Badge>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {missedFollowUpData.map((counselor, index) => (
+        <Card key={index} className="border-0 shadow-lg bg-gradient-to-br from-red-50 to-orange-50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-red-700 flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4" />
+              {counselor.counselor}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <div className="flex justify-between">
+                <span className="text-slate-600">Total:</span>
+                <span className="font-semibold">{counselor.total}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Missed:</span>
+                <span className="font-semibold text-red-600">{counselor.missed}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-600">Miss Rate:</span>
+                <Badge
+                  className={
+                    counselor.impact === "High"
+                      ? "bg-red-100 text-red-700"
+                      : counselor.impact === "Medium"
+                        ? "bg-yellow-100 text-yellow-700"
+                        : "bg-green-100 text-green-700"
+                  }
+                >
+                  {counselor.rate}%
+                </Badge>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  </div>
+)}
 
       {activeAnalytic === "livemembers" && (
         <div className="space-y-6">
@@ -1993,89 +2196,93 @@ export function AnalyticsTab() {
         </div>
       )}
 
-      {activeAnalytic === "renewaltrends" && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-emerald-700">Total Renewals</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-emerald-600">308</div>
-                <p className="text-xs text-slate-600">Last 6 months</p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50 to-cyan-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-blue-700">Renewal Revenue</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-blue-600">$770K</div>
-                <p className="text-xs text-slate-600">From renewals</p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-purple-50 to-indigo-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-purple-700">Avg Renewal Rate</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-purple-600">76.4%</div>
-                <p className="text-xs text-slate-600">6-month average</p>
-              </CardContent>
-            </Card>
-            <Card className="border-0 shadow-lg bg-gradient-to-br from-orange-50 to-red-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-orange-700">Growth Trend</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-orange-600">+13.2%</div>
-                <p className="text-xs text-slate-600">Month over month</p>
-              </CardContent>
-            </Card>
+  {activeAnalytic === "renewaltrends" && (
+  <div className="space-y-6">
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-emerald-50 to-green-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-emerald-700">Total Renewals</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-emerald-600">{renewalTrendsData.totalRenewals}</div>
+          <p className="text-xs text-slate-600">Filtered period</p>
+        </CardContent>
+      </Card>
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-blue-50 to-cyan-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-blue-700">Renewal Revenue</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-blue-600">
+            ${renewalTrendsData.totalRevenue.toLocaleString()}
           </div>
+          <p className="text-xs text-slate-600">From renewals</p>
+        </CardContent>
+      </Card>
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-purple-50 to-indigo-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-purple-700">Avg Renewal Rate</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-purple-600">{renewalTrendsData.avgRenewalRate}%</div>
+          <p className="text-xs text-slate-600">Overall average</p>
+        </CardContent>
+      </Card>
+      <Card className="border-0 shadow-lg bg-gradient-to-br from-orange-50 to-red-50">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-orange-700">Growth Trend</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-2xl font-bold text-orange-600">
+            {renewalTrendsData.growthRate > 0 ? "+" : ""}{renewalTrendsData.growthRate}%
+          </div>
+          <p className="text-xs text-slate-600">Month over month</p>
+        </CardContent>
+      </Card>
+    </div>
 
-          <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
-            <CardHeader>
-              <CardTitle className="text-emerald-700">Monthly Renewal Trends</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={400}>
-                <ComposedChart data={renewalTrends}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
-                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
-                  <Tooltip
-                    formatter={(value, name) => [
-                      name === "revenue" ? `${Number(value).toLocaleString()}` : value,
-                      name === "renewals" ? "Renewals" : name === "revenue" ? "Revenue" : "Rate %",
-                    ]}
-                  />
-                  <Bar yAxisId="left" dataKey="renewals" fill="#10b981" name="renewals" />
-                  <Line
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="rate"
-                    stroke="#f59e0b"
-                    strokeWidth={3}
-                    name="rate"
-                    dot={{ fill: "#f59e0b", strokeWidth: 2, r: 6 }}
-                  />
-                  <Line
-                    yAxisId="left"
-                    type="monotone"
-                    dataKey="revenue"
-                    stroke="#3b82f6"
-                    strokeWidth={3}
-                    name="revenue"
-                    dot={{ fill: "#3b82f6", strokeWidth: 2, r: 6 }}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+    <Card className="border-0 shadow-xl bg-white/90 backdrop-blur-sm">
+      <CardHeader>
+        <CardTitle className="text-emerald-700">Monthly Renewal Trends</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={400}>
+          <ComposedChart data={renewalTrendsData.monthlyTrends}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="month" tick={{ fontSize: 12 }} />
+            <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
+            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
+            <Tooltip
+              formatter={(value, name) => [
+                name === "revenue" ? `$${Number(value).toLocaleString()}` : value,
+                name === "renewals" ? "Renewals" : name === "revenue" ? "Revenue" : "Rate %",
+              ]}
+            />
+            <Bar yAxisId="left" dataKey="renewals" fill="#10b981" name="renewals" />
+            <Line
+              yAxisId="right"
+              type="monotone"
+              dataKey="rate"
+              stroke="#f59e0b"
+              strokeWidth={3}
+              name="rate"
+              dot={{ fill: "#f59e0b", strokeWidth: 2, r: 6 }}
+            />
+            <Line
+              yAxisId="left"
+              type="monotone"
+              dataKey="revenue"
+              stroke="#3b82f6"
+              strokeWidth={3}
+              name="revenue"
+              dot={{ fill: "#3b82f6", strokeWidth: 2, r: 6 }}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  </div>
+)}
     </div>
   )
 }
