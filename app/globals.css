@@ -83,7 +83,13 @@ body {
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
 }
-
+.scrollbar-hide::-webkit-scrollbar {
+  display: none; /* Chrome, Safari */
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;  /* IE/Edge */
+  scrollbar-width: none;     /* Firefox */
+}
 @layer base {
   * {
     @apply border-border;

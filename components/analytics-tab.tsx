@@ -586,135 +586,181 @@ const [missedFollowUpData, setMissedFollowUpData] = useState<Array<{
   }, [activeAnalytic, currentUserRole, assignedLeadIds, packageFilter, dateRange, timeFilter, searchTerm])
 
   // Live Members Analysis
-  useEffect(() => {
-    if (activeAnalytic !== "livemembers") return
+useEffect(() => {
+  if (activeAnalytic !== "livemembers") return
 
-    const fetchLiveMembersData = async () => {
-      try {
-        let usersQuery = supabase.from("users").select("email, is_active, date_of_birth, first_name, last_name")
-        let leadsQuery = supabase.from("leads").select("email, city, profession")
+  const fetchLiveMembersData = async () => {
+    try {
+      // Initialize with safe defaults first
+      setLiveMembers({
+        total: 0,
+        active: 0,
+        inactive: 0,
+        locationWise: [],
+        packageDistribution: [],
+        ageCategoryWise: [],
+        professionWise: [],
+      })
+
+      let usersQuery = supabase.from("users").select("email, is_active, date_of_birth, first_name, last_name")
+      let leadsQuery = supabase.from("leads").select("email, city, profession")
+      
+      if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
+        const { data: assignedLeads } = await supabase
+          .from('leads')
+          .select('email')
+          .in('id', assignedLeadIds)
         
-        if (currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length > 0) {
-          const { data: assignedLeads } = await supabase
-            .from('leads')
-            .select('email')
-            .in('id', assignedLeadIds)
-          
-          const assignedEmails = assignedLeads?.map(l => l.email) || []
-          if (assignedEmails.length === 0) {
-            setLiveMembers({
-              total: 0,
-              active: 0,
-              inactive: 0,
-              locationWise: [],
-              packageDistribution: [],
-              ageCategoryWise: [],
-              professionWise: [],
-            })
-            return
-          }
-          
-          usersQuery = usersQuery.in('email', assignedEmails)
-          leadsQuery = leadsQuery.in('email', assignedEmails)
+        const assignedEmails = assignedLeads?.map(l => l.email) || []
+        if (assignedEmails.length === 0) {
+          return
         }
         
-        const [{ data: users }, { data: leads }] = await Promise.all([usersQuery, leadsQuery])
-        const filteredUsers = applyUserFilters(users || [])
-        const filteredLeads = applyLeadFilters(leads || [])
-
-        const [mRes, pRes] = await Promise.all([
-          supabase.from("manual_payment").select("plan, payment_date"),
-          supabase.from("payment_links").select("plan, payment_date"),
-        ])
-        
-        const allPlanPayments = [...(mRes.data || []), ...(pRes.data || [])]
-        const filteredPlanPayments = applyPaymentFilters(allPlanPayments)
-
-        const leadMap = Object.fromEntries(
-          filteredLeads.map((r) => [r.email, { city: r.city || "Unknown", profession: r.profession || "Unknown" }])
-        )
-
-        const allPlans = filteredPlanPayments.map((r) => r.plan || "Unknown")
-        const pkgCounts = allPlans.reduce<Record<string, number>>((acc, pkg) => {
-          acc[pkg] = (acc[pkg] || 0) + 1
-          return acc
-        }, {})
-        const packageDistribution = Object.entries(pkgCounts).map(([pkg, total]) => ({ package: pkg, total }))
-
-        const members = filteredUsers.map((u) => {
-          const dob = u.date_of_birth ? new Date(u.date_of_birth) : new Date()
-          const age = Math.floor((Date.now() - dob.getTime()) / (1000 * 60 * 60 * 24 * 365.25))
-          const info = leadMap[u.email] || { city: "Unknown", profession: "Unknown" }
-          return { 
-            email: u.email, 
-            is_active: u.is_active || false, 
-            age: Math.max(0, age), 
-            city: info.city, 
-            profession: info.profession 
-          }
-        })
-
-        const total = members.length
-        const active = members.filter((m) => m.is_active).length
-        const inactive = total - active
-
-        const locAgg = members.reduce<Record<string, { active: number; inactive: number; total: number }>>((acc, m) => {
-          acc[m.city] = acc[m.city] || { active: 0, inactive: 0, total: 0 }
-          acc[m.city].total++
-          m.is_active ? acc[m.city].active++ : acc[m.city].inactive++
-          return acc
-        }, {})
-        const locationWise = Object.entries(locAgg).map(([location, stats]) => ({ location, ...stats }))
-
-        const bins: Record<string, [number, number]> = {
-          "18-25": [18, 25],
-          "26-35": [26, 35],
-          "36-45": [36, 45],
-          "46-55": [46, 55],
-          "55+": [56, 200],
-        }
-        const ageAgg: Record<string, { active: number; inactive: number; total: number }> = {}
-        members.forEach((m) => {
-          const cat = Object.entries(bins).find(([_, [min, max]]) => m.age >= min && m.age <= max)?.[0] || "Unknown"
-          ageAgg[cat] = ageAgg[cat] || { active: 0, inactive: 0, total: 0 }
-          ageAgg[cat].total++
-          m.is_active ? ageAgg[cat].active++ : ageAgg[cat].inactive++
-        })
-        const ageCategoryWise = Object.entries(ageAgg).map(([category, stats]) => ({ category, ...stats }))
-
-        const profAgg: Record<string, { active: number; inactive: number; total: number }> = {}
-        members.forEach((m) => {
-          profAgg[m.profession] = profAgg[m.profession] || { active: 0, inactive: 0, total: 0 }
-          profAgg[m.profession].total++
-          m.is_active ? profAgg[m.profession].active++ : profAgg[m.profession].inactive++
-        })
-        const professionWise = Object.entries(profAgg).map(([profession, stats]) => ({ profession, ...stats }))
-
-        setLiveMembers({
-          total,
-          active,
-          inactive,
-          locationWise,
-          packageDistribution,
-          ageCategoryWise,
-          professionWise,
-        })
-      } catch (error) {
-        console.error('Error in live members analysis:', error)
-        setLiveMembers({
-          total: 0,
-          active: 0,
-          inactive: 0,
-          locationWise: [],
-          packageDistribution: [],
-          ageCategoryWise: [],
-          professionWise: [],
-        })
+        usersQuery = usersQuery.in('email', assignedEmails)
+        leadsQuery = leadsQuery.in('email', assignedEmails)
       }
-    }
+      
+      const [{ data: users }, { data: leads }] = await Promise.all([usersQuery, leadsQuery])
+      const filteredUsers = applyUserFilters(users || [])
+      const filteredLeads = applyLeadFilters(leads || [])
 
-    fetchLiveMembersData()
-  }, [activeAnalytic, currentUserRole, assignedLeadIds, genderFilter, cityFilter, packageFilter, dateRange, timeFilter, searchTerm])
+      const [mRes, pRes] = await Promise.all([
+        supabase.from("manual_payment").select("plan, payment_date"),
+        supabase.from("payment_links").select("plan, payment_date"),
+      ])
+      
+      const allPlanPayments = [...(mRes.data || []), ...(pRes.data || [])]
+      const filteredPlanPayments = applyPaymentFilters(allPlanPayments)
+
+      const leadMap = Object.fromEntries(
+        filteredLeads.map((r) => [r.email, { city: r.city || "Unknown", profession: r.profession || "Unknown" }])
+      )
+
+      const allPlans = filteredPlanPayments.map((r) => r.plan || "Unknown")
+      const pkgCounts = allPlans.reduce<Record<string, number>>((acc, pkg) => {
+        const packageName = pkg || "Unknown"
+        acc[packageName] = (acc[packageName] || 0) + 1
+        return acc
+      }, {})
+      const packageDistribution = Object.entries(pkgCounts).map(([pkg, total]) => ({ 
+        package: pkg, 
+        total: total || 0 
+      }))
+
+      const members = filteredUsers.map((u) => {
+        let age = 0
+        if (u.date_of_birth) {
+          try {
+            const dob = new Date(u.date_of_birth)
+            if (!isNaN(dob.getTime())) {
+              age = Math.floor((Date.now() - dob.getTime()) / (1000 * 60 * 60 * 24 * 365.25))
+            }
+          } catch (error) {
+            age = 0
+          }
+        }
+        
+        const info = leadMap[u.email] || { city: "Unknown", profession: "Unknown" }
+        return { 
+          email: u.email || "", 
+          is_active: u.is_active || false, 
+          age: Math.max(0, age), 
+          city: info.city || "Unknown", 
+          profession: info.profession || "Unknown"
+        }
+      })
+
+      const total = members.length
+      const active = members.filter((m) => m.is_active).length
+      const inactive = total - active
+
+      const locAgg = members.reduce<Record<string, { active: number; inactive: number; total: number }>>((acc, m) => {
+        const city = m.city || "Unknown"
+        acc[city] = acc[city] || { active: 0, inactive: 0, total: 0 }
+        acc[city].total = (acc[city].total || 0) + 1
+        if (m.is_active) {
+          acc[city].active = (acc[city].active || 0) + 1
+        } else {
+          acc[city].inactive = (acc[city].inactive || 0) + 1
+        }
+        return acc
+      }, {})
+      const locationWise = Object.entries(locAgg).map(([location, stats]) => ({ 
+        location, 
+        active: stats.active || 0,
+        inactive: stats.inactive || 0,
+        total: stats.total || 0
+      }))
+
+      const bins: Record<string, [number, number]> = {
+        "18-25": [18, 25],
+        "26-35": [26, 35],
+        "36-45": [36, 45],
+        "46-55": [46, 55],
+        "55+": [56, 200],
+      }
+      const ageAgg: Record<string, { active: number; inactive: number; total: number }> = {}
+      members.forEach((m) => {
+        const age = typeof m.age === 'number' && !isNaN(m.age) ? m.age : 0
+        const cat = Object.entries(bins).find(([_, [min, max]]) => age >= min && age <= max)?.[0] || "Unknown"
+        ageAgg[cat] = ageAgg[cat] || { active: 0, inactive: 0, total: 0 }
+        ageAgg[cat].total = (ageAgg[cat].total || 0) + 1
+        if (m.is_active) {
+          ageAgg[cat].active = (ageAgg[cat].active || 0) + 1
+        } else {
+          ageAgg[cat].inactive = (ageAgg[cat].inactive || 0) + 1
+        }
+      })
+      const ageCategoryWise = Object.entries(ageAgg).map(([category, stats]) => ({ 
+        category, 
+        active: stats.active || 0,
+        inactive: stats.inactive || 0,
+        total: stats.total || 0
+      }))
+
+      const profAgg: Record<string, { active: number; inactive: number; total: number }> = {}
+      members.forEach((m) => {
+        const profession = m.profession || "Unknown"
+        profAgg[profession] = profAgg[profession] || { active: 0, inactive: 0, total: 0 }
+        profAgg[profession].total = (profAgg[profession].total || 0) + 1
+        if (m.is_active) {
+          profAgg[profession].active = (profAgg[profession].active || 0) + 1
+        } else {
+          profAgg[profession].inactive = (profAgg[profession].inactive || 0) + 1
+        }
+      })
+      const professionWise = Object.entries(profAgg).map(([profession, stats]) => ({ 
+        profession, 
+        active: stats.active || 0,
+        inactive: stats.inactive || 0,
+        total: stats.total || 0
+      }))
+
+      setLiveMembers({
+        total: total || 0,
+        active: active || 0,
+        inactive: inactive || 0,
+        locationWise,
+        packageDistribution,
+        ageCategoryWise,
+        professionWise,
+      })
+    } catch (error) {
+      console.error('Error in live members analysis:', error)
+      setLiveMembers({
+        total: 0,
+        active: 0,
+        inactive: 0,
+        locationWise: [],
+        packageDistribution: [],
+        ageCategoryWise: [],
+        professionWise: [],
+      })
+    }
+  }
+
+  fetchLiveMembersData()
+}, [activeAnalytic, currentUserRole, assignedLeadIds, genderFilter, cityFilter, packageFilter, dateRange, timeFilter, searchTerm])
 
   // Conversion Analysis
   useEffect(() => {

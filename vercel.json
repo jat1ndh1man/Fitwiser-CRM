@@ -8,6 +8,10 @@
     {
       "path": "/api/cron/syncLeads",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/auto-assign-leads",
+      "schedule": "*/30 * * * *"
     }
   ]
 }

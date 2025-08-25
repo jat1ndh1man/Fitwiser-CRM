@@ -161,14 +161,14 @@ export default function Sidebar({
     return (
       <div
         className={`
-          h-screen fixed top-0 left-0 bg-gradient-to-b from-slate-50 to-white
+          h-screen min-h-0 fixed top-0 left-0 bg-gradient-to-b from-slate-50 to-white
           border-r border-slate-200 shadow-lg transition-all duration-300 ease-in-out
           ${collapsed ? "w-16" : "w-64"}
           flex flex-col
         `}
       >
         {/* Header with toggle button */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-100">
+        <div className="flex items-center justify-between  p-4 border-b border-slate-100">
           {!collapsed && (
             <div className="flex items-center space-x-2">
               <img
@@ -233,7 +233,7 @@ export default function Sidebar({
   return (
     <div
       className={`
-        h-screen fixed top-0 left-0 bg-gradient-to-b from-slate-50 to-white
+        h-screen min-h-0 fixed top-0 left-0 bg-gradient-to-b from-slate-50 to-white
         border-r border-slate-200 shadow-lg transition-all duration-300 ease-in-out
         ${collapsed ? "w-16" : "w-64"}
         flex flex-col
@@ -257,11 +257,12 @@ export default function Sidebar({
           {collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
         </button>
       </div>
-
+        
       {/* Navigation Links */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      
+      <nav className="flex-1 min-h-0  overflow-y-auto px-3 py-4 space-y-1 scrollbar-hide">
         {allowedNavItems.length === 0 ? (
-          <div className="text-center text-slate-500 text-sm py-8">
+          <div className="text-center  text-slate-500 text-sm py-8">
             {!collapsed && "No accessible routes"}
           </div>
         ) : (

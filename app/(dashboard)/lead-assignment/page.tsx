@@ -121,6 +121,28 @@ interface LeadAssignment {
   assigner?: Executive
 }
 
+interface AutoAssignmentConfig {
+  id?: string
+  is_enabled: boolean
+  assignment_strategy: 'least_workload' | 'round_robin' | 'priority_based'
+  max_assignments_per_executive: number
+  consider_priority_matching: boolean
+  blacklisted_executives: string[]
+  priority_executives: string[]
+  working_hours_only: boolean
+  working_hours_start: string
+  working_hours_end: string
+  auto_assign_interval_minutes: number
+  created_at?: string
+  updated_at?: string
+}
+
+interface ExecutivePriority {
+  executive_id: string
+  priority_level: number // 1 = highest, 5 = lowest
+  specialty_match: string[]
+}
+
 interface PaginationState {
   currentPage: number
   itemsPerPage: number
@@ -149,6 +171,33 @@ export default function LeadAssignmentTab() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const STRATEGY_HELP: Record<'least_workload' | 'round_robin' | 'priority_based', string> = {
+  least_workload: 'Assigns to executives with the fewest active assignments',
+  round_robin: 'Distributes leads evenly across all executives',
+  priority_based: 'Prioritizes specific executives first',
+};
+
+  const [autoAssignConfig, setAutoAssignConfig] = useState<AutoAssignmentConfig>({
+  is_enabled: false,
+  assignment_strategy: 'least_workload',
+  max_assignments_per_executive: 10,
+  consider_priority_matching: false,
+  blacklisted_executives: [],
+  priority_executives: [],
+  working_hours_only: false,
+  working_hours_start: '09:00',
+  working_hours_end: '17:00',
+  auto_assign_interval_minutes: 30
+})
+const [isAutoAssignDialogOpen, setIsAutoAssignDialogOpen] = useState(false)
+const [isAutoAssignmentRunning, setIsAutoAssignmentRunning] = useState(false)
+const [autoAssignmentStats, setAutoAssignmentStats] = useState({
+  last_run: null as string | null,
+  assignments_today: 0,
+  success_rate: 0,
+  failed_assignments: 0
+})
 
   // Pagination states
   const [pendingPagination, setPendingPagination] = useState<PaginationState>({
@@ -199,6 +248,340 @@ export default function LeadAssignmentTab() {
     }
   }
 
+  const fetchAutoAssignConfig = async () => {
+  try {
+    const { data, error } = await supabase
+      .from('auto_assignment_config')
+      .select('*')
+      .eq('created_by', currentUser?.id)
+      .maybeSingle()
+
+    if (error && error.code !== 'PGRST116') throw error
+    
+    if (data) {
+      setAutoAssignConfig(data)
+    }
+  } catch (error) {
+    console.error("Error fetching auto-assignment config:", error)
+  }
+}
+
+// Save auto-assignment configuration
+const saveAutoAssignConfig = async (config: AutoAssignmentConfig) => {
+  try {
+    const configData = {
+      ...config,
+      created_by: currentUser?.id,
+      updated_at: new Date().toISOString()
+    }
+
+    const { data, error } = await supabase
+      .from('auto_assignment_config')
+      .upsert(configData)
+      .select()
+
+    if (error) throw error
+
+    setAutoAssignConfig(data[0])
+    toast({
+      title: "Success",
+      description: "Auto-assignment configuration saved successfully",
+    })
+  } catch (error) {
+    console.error("Error saving auto-assignment config:", error)
+    toast({
+      title: "Error",
+      description: "Failed to save configuration",
+      variant: "destructive",
+    })
+  }
+}
+
+const runAutomatedAssignment = async () => {
+  if (!autoAssignConfig.is_enabled) {
+    toast({
+      title: "Auto-assignment Disabled",
+      description: "Please enable auto-assignment first",
+      variant: "destructive",
+    })
+    return
+  }
+
+  setIsAutoAssignmentRunning(true)
+  let assignmentCount = 0
+  const assignmentResults: any[] = []
+  
+  try {
+    console.log("🚀 Starting automated assignment...")
+    console.log("Config:", autoAssignConfig)
+    console.log("Available executives:", executives.length)
+    console.log("Pending leads:", pendingLeads.length)
+
+    // Check working hours if enabled
+    if (autoAssignConfig.working_hours_only) {
+      const now = new Date()
+      const currentTime = format(now, 'HH:mm')
+      const startTime = autoAssignConfig.working_hours_start
+      const endTime = autoAssignConfig.working_hours_end
+      
+      if (currentTime < startTime || currentTime > endTime) {
+        toast({
+          title: "Outside Working Hours",
+          description: `Auto-assignment only runs between ${startTime} and ${endTime}`,
+          variant: "destructive",
+        })
+        return
+      }
+    }
+
+    // Get available executives (not blacklisted, under max assignments)
+    const availableExecutives = executives.filter(exec => {
+      const isBlacklisted = autoAssignConfig.blacklisted_executives.includes(exec.id)
+      const isOverLimit = (exec.active_assignments || 0) >= autoAssignConfig.max_assignments_per_executive
+      
+      console.log(`Executive ${exec.first_name} ${exec.last_name}:`, {
+        isBlacklisted,
+        isOverLimit,
+        activeAssignments: exec.active_assignments || 0,
+        maxAllowed: autoAssignConfig.max_assignments_per_executive
+      })
+      
+      return !isBlacklisted && !isOverLimit
+    })
+
+    console.log("Available executives after filtering:", availableExecutives.length)
+
+    if (availableExecutives.length === 0) {
+      toast({
+        title: "No Available Executives",
+        description: "All executives are either blacklisted or at maximum capacity",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Get leads to assign - start with high priority, then medium, then low
+    const priorityOrder = ['High', 'Medium', 'Low']
+    let leadsToAssign: Lead[] = []
+    
+    for (const priority of priorityOrder) {
+      const leadsWithPriority = pendingLeads
+        .filter(lead => lead.priority === priority)
+        .slice(0, Math.min(5, availableExecutives.length * 2)) // Limit per priority
+      
+      leadsToAssign = [...leadsToAssign, ...leadsWithPriority]
+      
+      if (leadsToAssign.length >= 10) break // Overall limit
+    }
+
+    console.log("Leads to assign:", leadsToAssign.length)
+
+    if (leadsToAssign.length === 0) {
+      toast({
+        title: "No Leads to Assign",
+        description: "No pending leads available for assignment",
+      })
+      return
+    }
+
+    // Sort executives based on strategy
+    let sortedExecutives = [...availableExecutives]
+    
+    switch (autoAssignConfig.assignment_strategy) {
+      case 'least_workload':
+        sortedExecutives.sort((a, b) => (a.active_assignments || 0) - (b.active_assignments || 0))
+        console.log("Sorted by least workload:", sortedExecutives.map(e => `${e.first_name} (${e.active_assignments || 0})`))
+        break
+        
+      case 'priority_based':
+        sortedExecutives.sort((a, b) => {
+          const aPriority = autoAssignConfig.priority_executives.indexOf(a.id)
+          const bPriority = autoAssignConfig.priority_executives.indexOf(b.id)
+          
+          // Both in priority list - sort by priority order
+          if (aPriority !== -1 && bPriority !== -1) return aPriority - bPriority
+          
+          // Only a is in priority list
+          if (aPriority !== -1) return -1
+          
+          // Only b is in priority list  
+          if (bPriority !== -1) return 1
+          
+          // Neither in priority list - sort by workload
+          return (a.active_assignments || 0) - (b.active_assignments || 0)
+        })
+        console.log("Sorted by priority:", sortedExecutives.map(e => `${e.first_name} (priority: ${autoAssignConfig.priority_executives.indexOf(e.id)})`))
+        break
+        
+      case 'round_robin':
+        // For round robin, we'll cycle through executives
+        // This is a simplified version - you might want to store last assigned executive
+        sortedExecutives.sort(() => Math.random() - 0.5)
+        console.log("Round robin shuffle:", sortedExecutives.map(e => e.first_name))
+        break
+    }
+
+    // Assign leads
+    let executiveIndex = 0
+    
+    for (let i = 0; i < leadsToAssign.length; i++) {
+      const lead = leadsToAssign[i]
+      
+      // Find next available executive
+      let assignedExecutive = null
+      let attempts = 0
+      
+      while (attempts < sortedExecutives.length) {
+        const executive = sortedExecutives[executiveIndex % sortedExecutives.length]
+        
+        // Check if this executive can still take more assignments
+        if ((executive.active_assignments || 0) < autoAssignConfig.max_assignments_per_executive) {
+          assignedExecutive = executive
+          break
+        }
+        
+        executiveIndex++
+        attempts++
+      }
+      
+      if (!assignedExecutive) {
+        console.log("No more available executives")
+        break
+      }
+      
+      console.log(`Assigning lead ${lead.name} to ${assignedExecutive.first_name} ${assignedExecutive.last_name}`)
+      
+      // Calculate due date (7 days from now)
+      const dueDate = format(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), "yyyy-MM-dd")
+      
+      // Create assignment
+      const assignmentData = {
+        lead_id: lead.id,
+        assigned_to: assignedExecutive.id,
+        assigned_by: currentUser!.id,
+        assigned_at: new Date().toISOString(),
+        status: "active",
+        priority: lead.priority,
+        notes: `Auto-assigned via ${autoAssignConfig.assignment_strategy} strategy at ${format(new Date(), 'yyyy-MM-dd HH:mm:ss')}`,
+        due_date: dueDate,
+        is_auto_assigned: true
+      }
+
+      const { data: insertedAssignment, error: insertError } = await supabase
+        .from("lead_assignments")
+        .insert([assignmentData])
+        .select()
+
+      if (insertError) {
+        console.error("Error inserting assignment:", insertError)
+        continue
+      }
+
+      // Update lead status
+      const { error: leadUpdateError } = await supabase
+        .from("leads")
+        .update({
+          status: "assigned",
+          counselor: `${assignedExecutive.first_name} ${assignedExecutive.last_name}`,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", lead.id)
+
+      if (leadUpdateError) {
+        console.error("Error updating lead:", leadUpdateError)
+        // Rollback assignment if lead update fails
+        await supabase.from("lead_assignments").delete().eq("id", insertedAssignment[0].id)
+        continue
+      }
+
+      // Success - record the assignment
+      assignmentResults.push({
+        lead: lead.name,
+        executive: `${assignedExecutive.first_name} ${assignedExecutive.last_name}`,
+        priority: lead.priority
+      })
+
+      assignmentCount++
+      
+      // Update executive's active assignments count for next iteration
+      assignedExecutive.active_assignments = (assignedExecutive.active_assignments || 0) + 1
+      
+      // Move to next executive for round robin and least workload
+      if (autoAssignConfig.assignment_strategy === 'round_robin') {
+        executiveIndex++
+      } else if (autoAssignConfig.assignment_strategy === 'least_workload') {
+        // Re-sort executives by current workload
+        sortedExecutives.sort((a, b) => (a.active_assignments || 0) - (b.active_assignments || 0))
+        executiveIndex = 0 // Always pick the first (least loaded) executive
+      } else {
+        executiveIndex++
+      }
+    }
+
+    // Update stats
+    setAutoAssignmentStats(prev => ({
+      ...prev,
+      last_run: new Date().toISOString(),
+      assignments_today: prev.assignments_today + assignmentCount,
+      success_rate: assignmentCount > 0 ? 100 : prev.success_rate
+    }))
+
+    // Show results
+    if (assignmentCount > 0) {
+      toast({
+        title: "Auto-assignment Complete! 🎉",
+        description: `Successfully assigned ${assignmentCount} leads:\n${assignmentResults.map(r => `• ${r.lead} → ${r.executive}`).join('\n')}`,
+      })
+    } else {
+      toast({
+        title: "No Assignments Made",
+        description: "No suitable lead-executive matches found",
+        variant: "destructive",
+      })
+    }
+
+    // Refresh data
+    console.log("Refreshing data...")
+    await Promise.all([fetchPendingLeads(), fetchAssignments(), fetchExecutives()])
+    console.log("✅ Auto-assignment completed")
+
+  } catch (error) {
+    console.error("❌ Error in automated assignment:", error)
+    setAutoAssignmentStats(prev => ({
+      ...prev,
+      failed_assignments: prev.failed_assignments + 1
+    }))
+    
+    toast({
+      title: "Auto-assignment Failed",
+      description: `An error occurred: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      variant: "destructive",
+    })
+  } finally {
+    setIsAutoAssignmentRunning(false)
+  }
+}
+
+// Toggle executive blacklist
+const toggleExecutiveBlacklist = (executiveId: string) => {
+  setAutoAssignConfig(prev => ({
+    ...prev,
+    blacklisted_executives: prev.blacklisted_executives.includes(executiveId)
+      ? prev.blacklisted_executives.filter(id => id !== executiveId)
+      : [...prev.blacklisted_executives, executiveId]
+  }))
+}
+
+// Toggle executive priority
+const toggleExecutivePriority = (executiveId: string) => {
+  setAutoAssignConfig(prev => ({
+    ...prev,
+    priority_executives: prev.priority_executives.includes(executiveId)
+      ? prev.priority_executives.filter(id => id !== executiveId)
+      : [...prev.priority_executives, executiveId]
+  }))
+}
+
   // Pagination helper functions
   const updatePaginationState = (
     data: any[], 
@@ -240,6 +623,12 @@ export default function LeadAssignmentTab() {
   useEffect(() => {
     initializeData()
   }, [])
+  
+  useEffect(() => {
+  if (currentUser?.id) {
+    fetchAutoAssignConfig()
+  }
+}, [currentUser?.id])
 
   // Clear filters when switching views
   useEffect(() => {
@@ -250,28 +639,29 @@ export default function LeadAssignmentTab() {
     resetPagination(activeView)
   }, [activeView])
 
-  const initializeData = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      await getCurrentUser()
-      await Promise.all([
-        fetchPendingLeads(),
-        fetchExecutives(),
-        fetchAssignments()
-      ])
-    } catch (error) {
-      console.error("Error initializing data:", error)
-      setError(error instanceof Error ? error.message : "Failed to load data")
-      toast({
-        title: "Error",
-        description: "Failed to load data. Please try again.",
-        variant: "destructive",
-      })
-    } finally {
-      setLoading(false)
-    }
+const initializeData = async () => {
+  try {
+    setLoading(true)
+    setError(null)
+    await getCurrentUser()
+    await Promise.all([
+      fetchPendingLeads(),
+      fetchExecutives(),
+      fetchAssignments(),
+      fetchAutoAssignConfig() // Add this line
+    ])
+  } catch (error) {
+    console.error("Error initializing data:", error)
+    setError(error instanceof Error ? error.message : "Failed to load data")
+    toast({
+      title: "Error",
+      description: "Failed to load data. Please try again.",
+      variant: "destructive",
+    })
+  } finally {
+    setLoading(false)
   }
+}
 
   const getCurrentUser = async () => {
     try {
@@ -984,6 +1374,285 @@ export default function LeadAssignmentTab() {
             <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
+          <Button
+    variant="outline"
+    onClick={handleRefresh}
+    disabled={isRefreshing}
+    className="border-emerald-200 hover:bg-emerald-50 text-emerald-700"
+  >
+    <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+    Refresh
+  </Button>
+  
+  {/* Auto Assignment Button */}
+  <Dialog open={isAutoAssignDialogOpen} onOpenChange={setIsAutoAssignDialogOpen}>
+    <DialogTrigger asChild>
+      <Button 
+        variant="outline"
+        className="border-blue-200 hover:bg-blue-50 text-blue-700"
+      >
+        <Activity className="h-4 w-4 mr-2" />
+        Auto Assignment
+      </Button>
+    </DialogTrigger>
+    <DialogContent className="sm:max-w-[800px] max-h-[80vh] overflow-y-auto">
+      <DialogHeader>
+        <DialogTitle className="text-blue-800 text-xl flex items-center gap-2">
+          <Activity className="h-5 w-5" />
+          Automated Lead Assignment
+        </DialogTitle>
+        <DialogDescription className="text-gray-600">
+          Configure and manage automated lead assignment settings
+        </DialogDescription>
+      </DialogHeader>
+      
+      <div className="space-y-6 py-4">
+        {/* Status Card */}
+        <Card className="border-blue-200 bg-blue-50/50">
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className={`h-3 w-3 rounded-full ${autoAssignConfig.is_enabled ? 'bg-green-500' : 'bg-gray-400'}`} />
+                <span className="font-medium text-gray-900">
+                  Auto-assignment is {autoAssignConfig.is_enabled ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+              <Button
+                onClick={runAutomatedAssignment}
+                disabled={isAutoAssignmentRunning || !autoAssignConfig.is_enabled}
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                {isAutoAssignmentRunning ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Running...
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="h-4 w-4 mr-2" />
+                    Run Now
+                  </>
+                )}
+              </Button>
+            </div>
+            
+            {autoAssignmentStats.last_run && (
+              <div className="grid grid-cols-3 gap-4 text-sm">
+                <div>
+                  <span className="text-gray-600">Last Run:</span>
+                  <div className="font-medium">{safeFormatDate(autoAssignmentStats.last_run, 'MMM dd, HH:mm')}</div>
+                </div>
+                <div>
+                  <span className="text-gray-600">Today's Assignments:</span>
+                  <div className="font-medium text-blue-600">{autoAssignmentStats.assignments_today}</div>
+                </div>
+                <div>
+                  <span className="text-gray-600">Available Executives:</span>
+                  <div className="font-medium text-emerald-600">
+                    {executives.filter(e => !autoAssignConfig.blacklisted_executives.includes(e.id)).length}
+                  </div>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Tabs defaultValue="general" className="w-full">
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="general">General Settings</TabsTrigger>
+            <TabsTrigger value="executives">Executive Management</TabsTrigger>
+            <TabsTrigger value="schedule">Schedule & Rules</TabsTrigger>
+          </TabsList>
+          
+          <TabsContent value="general" className="space-y-4 mt-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-gray-700 font-medium">Enable Auto-assignment</Label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={autoAssignConfig.is_enabled}
+                    onChange={(e) => setAutoAssignConfig(prev => ({ ...prev, is_enabled: e.target.checked }))}
+                    className="rounded border-gray-300"
+                  />
+                  <span className="text-sm text-gray-600">Automatically assign new leads</span>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+               <Label className="text-gray-700 font-medium">Assignment Strategy</Label>
+
+{/* NEW helper row under the title */}
+<p className="text-xs text-gray-500">
+  {STRATEGY_HELP[autoAssignConfig.assignment_strategy]}
+</p>
+
+<Select
+  value={autoAssignConfig.assignment_strategy}
+  onValueChange={(value: 'least_workload' | 'round_robin' | 'priority_based') =>
+    setAutoAssignConfig(prev => ({ ...prev, assignment_strategy: value }))
+  }
+>
+  <SelectTrigger className="border-gray-300">
+    <SelectValue />
+  </SelectTrigger>
+  <SelectContent>
+    <SelectItem value="least_workload">Least Workload First</SelectItem>
+    <SelectItem value="round_robin">Round Robin</SelectItem>
+    <SelectItem value="priority_based">Priority Based</SelectItem>
+  </SelectContent>
+</Select>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-gray-700 font-medium">Max Assignments per Executive</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={autoAssignConfig.max_assignments_per_executive}
+                  onChange={(e) => setAutoAssignConfig(prev => ({ 
+                    ...prev, 
+                    max_assignments_per_executive: parseInt(e.target.value) || 10 
+                  }))}
+                  className="border-gray-300"
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label className="text-gray-700 font-medium">Auto-assign Interval (minutes)</Label>
+                <Input
+                  type="number"
+                  min="5"
+                  max="1440"
+                  value={autoAssignConfig.auto_assign_interval_minutes}
+                  onChange={(e) => setAutoAssignConfig(prev => ({ 
+                    ...prev, 
+                    auto_assign_interval_minutes: parseInt(e.target.value) || 30 
+                  }))}
+                  className="border-gray-300"
+                />
+              </div>
+            </div>
+          </TabsContent>
+          
+          <TabsContent value="executives" className="space-y-4 mt-4">
+            <div className="space-y-4">
+              <div>
+                <h4 className="font-medium text-gray-900 mb-3">Priority Executives</h4>
+                <p className="text-sm text-gray-600 mb-3">These executives will be assigned leads first</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {executives.map((executive) => (
+                    <div key={executive.id} className="flex items-center space-x-3 p-3 border rounded-lg">
+                      <input
+                        type="checkbox"
+                        checked={autoAssignConfig.priority_executives.includes(executive.id)}
+                        onChange={() => toggleExecutivePriority(executive.id)}
+                        className="rounded border-gray-300"
+                      />
+                      <Avatar className="h-8 w-8">
+                        <AvatarImage src={executive.profile_image_url || "/placeholder.svg"} />
+                        <AvatarFallback className="bg-green-100 text-green-800">
+                          {(executive.first_name?.[0] || '') + (executive.last_name?.[0] || '')}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <div className="font-medium text-sm">{getExecutiveName(executive)}</div>
+                        <div className="text-xs text-gray-500">{executive.active_assignments || 0} active</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              <div>
+                <h4 className="font-medium text-gray-900 mb-3">Blacklisted Executives</h4>
+                <p className="text-sm text-gray-600 mb-3">These executives will not receive auto-assigned leads</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {executives.map((executive) => (
+                    <div key={executive.id} className="flex items-center space-x-3 p-3 border rounded-lg">
+                      <input
+                        type="checkbox"
+                        checked={autoAssignConfig.blacklisted_executives.includes(executive.id)}
+                        onChange={() => toggleExecutiveBlacklist(executive.id)}
+                        className="rounded border-gray-300"
+                      />
+                      <Avatar className="h-8 w-8">
+                        <AvatarImage src={executive.profile_image_url || "/placeholder.svg"} />
+                        <AvatarFallback className="bg-red-100 text-red-800">
+                          {(executive.first_name?.[0] || '') + (executive.last_name?.[0] || '')}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <div className="font-medium text-sm">{getExecutiveName(executive)}</div>
+                        <div className="text-xs text-gray-500">{executive.active_assignments || 0} active</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </TabsContent>
+          
+          <TabsContent value="schedule" className="space-y-4 mt-4">
+            <div className="space-y-4">
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  checked={autoAssignConfig.working_hours_only}
+                  onChange={(e) => setAutoAssignConfig(prev => ({ ...prev, working_hours_only: e.target.checked }))}
+                  className="rounded border-gray-300"
+                />
+                <Label className="text-gray-700">Only assign during working hours</Label>
+              </div>
+              
+              {autoAssignConfig.working_hours_only && (
+                <div className="grid grid-cols-2 gap-4 ml-6">
+                  <div className="space-y-2">
+                    <Label className="text-gray-700 font-medium">Working Hours Start</Label>
+                    <Input
+                      type="time"
+                      value={autoAssignConfig.working_hours_start}
+                      onChange={(e) => setAutoAssignConfig(prev => ({ ...prev, working_hours_start: e.target.value }))}
+                      className="border-gray-300"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-gray-700 font-medium">Working Hours End</Label>
+                    <Input
+                      type="time"
+                      value={autoAssignConfig.working_hours_end}
+                      onChange={(e) => setAutoAssignConfig(prev => ({ ...prev, working_hours_end: e.target.value }))}
+                      className="border-gray-300"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
+      
+      <DialogFooter>
+        <Button 
+          variant="outline" 
+          onClick={() => setIsAutoAssignDialogOpen(false)}
+          className="border-gray-300"
+        >
+          Cancel
+        </Button>
+        <Button 
+          onClick={() => saveAutoAssignConfig(autoAssignConfig)}
+          className="bg-blue-600 hover:bg-blue-700"
+        >
+          Save Configuration
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+          
           <Dialog open={isAssignDialogOpen} onOpenChange={setIsAssignDialogOpen}>
             <DialogTrigger asChild>
               <Button className="bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white shadow-lg">
