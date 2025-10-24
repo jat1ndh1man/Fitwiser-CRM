@@ -8,8 +8,8 @@ import "./globals.css"
 export const dynamic = 'force-dynamic'
 
 export const metadata: Metadata = {
-  title: "Your App",
-  description: "Your app description",
+  title: "Fitwiser CRM",
+  description: "CRM System for Fitwiser Fitness",
 }
 
 export default function RootLayout({
