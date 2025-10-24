@@ -6,6 +6,8 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+    transpilePackages: ['recharts'],
+
   images: {
     unoptimized: true,
   },
