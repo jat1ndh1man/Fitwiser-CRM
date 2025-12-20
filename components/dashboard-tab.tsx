@@ -615,7 +615,7 @@ useEffect(() => {
 
   const handleCardClick = (status: string) => {
     if (status === "totalClients") {
-      router.push("/clients")
+      router.push("/leads")
     } else if (status === "totalRevenue") {
       router.push("/reports")
     } else {
