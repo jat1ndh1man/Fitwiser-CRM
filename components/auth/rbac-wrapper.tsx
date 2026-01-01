@@ -2,7 +2,7 @@
 
 import type React from "react"
 import { useAuth } from "./auth-provider"
-import { hasPermission } from "@/lib/auth"
+import { hasPermission } from "@/lib/supabase"
 import { AlertTriangle, Lock } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
@@ -11,9 +11,16 @@ interface RBACWrapperProps {
   requiredRoles?: string[]
   fallback?: React.ReactNode
   requireAllData?: boolean // If true, only users who can view all data can access
+  requireManagerAccess?: boolean // If true, only managers and above can access
 }
 
-export function RBACWrapper({ children, requiredRoles = [], fallback, requireAllData = false }: RBACWrapperProps) {
+export function RBACWrapper({ 
+  children, 
+  requiredRoles = [], 
+  fallback, 
+  requireAllData = false, 
+  requireManagerAccess = false 
+}: RBACWrapperProps) {
   const { userSession, loading } = useAuth()
 
   if (loading) {
@@ -57,6 +64,20 @@ export function RBACWrapper({ children, requiredRoles = [], fallback, requireAll
           <AlertTriangle className="h-4 w-4 text-amber-600" />
           <AlertDescription className="text-amber-800">
             This feature is only available to administrators and managers.
+          </AlertDescription>
+        </Alert>
+      )
+    )
+  }
+
+  // Check if user needs manager access
+  if (requireManagerAccess && !userSession.canManageTeam) {
+    return (
+      fallback || (
+        <Alert className="border-amber-200 bg-amber-50">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-amber-800">
+            This feature is only available to managers.
           </AlertDescription>
         </Alert>
       )

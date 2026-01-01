@@ -28,7 +28,12 @@ import {
   BarChart3,
   FileEdit,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  Heart,
+  MessageCircle,
+  TrendingUp,
+  Headphones,
+  Trophy
 } from 'lucide-react';
 
 // Types
@@ -53,11 +58,11 @@ interface PermissionWithRole extends Permission {
   name: string;
 }
 
-// Static role definitions for UI
+// Updated static role definitions for UI with all required roles
 const staticRoleDefs = [
   {
     key: 'superadmin',
-    name: 'Superadmin',
+    name: 'Super Admin',
     icon: Crown,
     color: 'text-indigo-600',
     description: 'Full access to all system features'
@@ -70,25 +75,53 @@ const staticRoleDefs = [
     description: 'Administrative access to the system'
   },
   {
-    key: 'executive',
-    name: 'Executive',
-    icon: Star,
-    color: 'text-amber-600',
-    description: 'Executive level access'
-  },
-  {
-    key: 'manager',
-    name: 'Manager',
+    key: 'sales_manager',
+    name: 'Sales Manager',
     icon: Briefcase,
     color: 'text-blue-600',
-    description: 'Management level access'
+    description: 'Access to all sales team member\'s data'
   },
   {
-    key: 'client',
-    name: 'Client',
-    icon: User,
+    key: 'wellness_manager',
+    name: 'Wellness Manager',
+    icon: Heart,
+    color: 'text-pink-600',
+    description: 'Access to all wellness team member\'s data'
+  },
+  {
+    key: 'relationship_manager',
+    name: 'Relationship Manager',
+    icon: Users,
+    color: 'text-teal-600',
+    description: 'Access to all relationship team member\'s data'
+  },
+  {
+    key: 'counselor',
+    name: 'Counselor',
+    icon: MessageCircle,
+    color: 'text-orange-600',
+    description: 'Minimum and specific data access for counseling'
+  },
+  {
+    key: 'bde',
+    name: 'BDE',
+    icon: TrendingUp,
+    color: 'text-cyan-600',
+    description: 'Minimum and specific data access for business development'
+  },
+  {
+    key: 'customer_support',
+    name: 'Customer Support',
+    icon: Headphones,
+    color: 'text-yellow-600',
+    description: 'Minimum and specific data access for customer support'
+  },
+  {
+    key: 'coach',
+    name: 'Coach',
+    icon: Trophy,
     color: 'text-green-600',
-    description: 'Client level access'
+    description: 'Minimum and specific data access for coaching'
   }
 ];
 
@@ -119,85 +152,118 @@ export default function UserAccessControl() {
   const initialLoad = useRef(true);
 
   // Fetch data from Supabase
-const fetchData = async () => {
-  setLoading(true);
-  try {
-    // Fetch roles from user_roles table
-    const { data: rolesData, error: rolesError } = await supabase
-      .from('user_roles')
-      .select('*')
-      .order('name');
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      // Fetch roles from user_roles table
+      const { data: rolesData, error: rolesError } = await supabase
+        .from('user_roles')
+        .select('*')
+        .order('name');
 
-    if (rolesError) throw rolesError;
+      if (rolesError) throw rolesError;
 
-    // Filter the roles to only include Superadmin, Admin, and Executive
-    const filteredRoles = rolesData.filter(role => 
-      ['superadmin', 'admin', 'executive'].includes(role.name.toLowerCase())
-    );
-
-    // Process roles and add UI metadata
-    const processedRoles: Role[] = filteredRoles.map(role => {
-      const roleKey = role.name.toLowerCase();
-      const roleDef = staticRoleDefs.find(def => def.key === roleKey) || staticRoleDefs[0]; // Default to superadmin
-
-      return {
-        ...role,
-        key: roleKey,
-        icon: roleDef.icon,
-        color: roleDef.color,
-        description: roleDef.description
+      // Map database role names to our expected format
+      const roleNameMap: Record<string, string> = {
+        'Superadmin': 'Super Admin',
+        'Admin': 'Admin',
+        'Sales Manager': 'Sales Manager',
+        'Wellness Manager': 'Wellness Manager',
+        'Relationship Manager': 'Relationship Manager',
+        'Counselor': 'Counselor',
+        'BDE': 'BDE',
+        'Customer Support': 'Customer Support',
+        'Coach': 'Coach'
       };
-    });
 
-    setRoles(processedRoles);  // Set the filtered roles here
+      // Filter and map roles from database to our expected format
+      const processedRoles: Role[] = [];
+      
+      for (const dbRole of rolesData) {
+        const mappedName = roleNameMap[dbRole.name];
+        if (mappedName) {
+          // Convert to key format (lowercase, underscores)
+          const roleKey = mappedName.toLowerCase().replace(/\s+/g, '_');
+          const roleDef = staticRoleDefs.find(def => def.key === roleKey) || {
+            icon: Users,
+            color: 'text-gray-600',
+            description: 'Role with specific permissions'
+          };
 
-    // Count users per role
-    const userCounts: {[key: string]: number} = {};
-    for (const role of processedRoles) {
-      const { count, error } = await supabase
-        .from('users')
-        .select('id', { count: 'exact', head: true })
-        .eq('role_id', role.id);
-
-      if (!error) {
-        userCounts[role.id] = count || 0;
+          processedRoles.push({
+            ...dbRole,
+            name: mappedName, // Use mapped name for display
+            key: roleKey,
+            icon: roleDef.icon,
+            color: roleDef.color,
+            description: roleDef.description
+          });
+        }
       }
+
+      setRoles(processedRoles);
+
+      // Count users per role
+      const userCounts: {[key: string]: number} = {};
+      for (const role of processedRoles) {
+        const { count, error } = await supabase
+          .from('users')
+          .select('id', { count: 'exact', head: true })
+          .eq('role_id', role.id);
+
+        if (!error) {
+          userCounts[role.id] = count || 0;
+        }
+      }
+      setRoleUsers(userCounts);
+
+      // Fetch existing permissions from permissions_crm table
+      const { data: permissionsData, error: permissionsError } = await supabase
+        .from('permissions_crm')
+        .select(`
+          *,
+          user_roles!role_id(name)
+        `);
+
+      if (permissionsError) throw permissionsError;
+
+      // Process permissions data
+      const processedPermissions: PermissionWithRole[] = [];
+      
+      // First, get all existing permissions
+      for (const perm of permissionsData) {
+        const roleName = perm.user_roles?.name;
+        if (roleName && roleNameMap[roleName]) {
+          processedPermissions.push({
+            id: perm.id,
+            role_id: perm.role_id,
+            route_path: perm.route_path,
+            route_name: perm.route_name,
+            can_access: perm.can_access,
+            name: roleNameMap[roleName] // Use mapped name
+          });
+        }
+      }
+
+      setPermissions(processedPermissions);
+
+      // Check if we need to create default permissions for any roles
+      const rolesNeedingPermissions = processedRoles.filter(role => {
+        // Check if this role has any permissions in the current list
+        return !processedPermissions.some(perm => perm.role_id === role.id);
+      });
+
+      if (rolesNeedingPermissions.length > 0) {
+        await createDefaultPermissions(rolesNeedingPermissions);
+      }
+
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      setNotification({ type: 'error', message: 'Failed to load data from database' });
+    } finally {
+      setLoading(false);
     }
-    setRoleUsers(userCounts);
-
-    // Fetch existing permissions from permissions_crm table
-    const { data: permissionsData, error: permissionsError } = await supabase
-      .from('permissions_crm')
-      .select(`
-        *,
-        user_roles!role_id(name)
-      `);
-
-    if (permissionsError) throw permissionsError;
-
-    // Process permissions data
-   const processedPermissions: PermissionWithRole[] = permissionsData
-      // ⬇️ Skip any Settings records that might still exist
-      // .filter(perm => perm.route_path !== '/settings')
-      .map(perm => ({
-        id: perm.id,
-        role_id: perm.role_id,
-        route_path: perm.route_path,
-        route_name: perm.route_name,
-        can_access: perm.can_access,
-        name: perm.user_roles?.name || 'Unknown'
-      }));
-
-    setPermissions(processedPermissions);
-
-  } catch (error) {
-    console.error('Error fetching data:', error);
-    setNotification({ type: 'error', message: 'Failed to load data from database' });
-  } finally {
-    setLoading(false);
-  }
-};
-
+  };
 
   // Create default permissions for all roles and routes
   const createDefaultPermissions = async (rolesList: Role[]) => {
@@ -206,11 +272,39 @@ const fetchData = async () => {
       
       for (const role of rolesList) {
         for (const route of routes) {
-          // Give superadmin full access by default, others get limited access
-          const defaultAccess = role.key === 'superadmin' ? true : 
-                               role.key === 'admin' ? route.path !== '/useraccess' :
-                               role.key === 'executive' ? ['/dashboard', '/leads', '/lead-information', '/clients'].includes(route.path) :
-                               false;
+          // Default access rules
+          let defaultAccess = false;
+          const roleKey = role.key || '';
+          
+          if (roleKey === 'superadmin') {
+            // Super Admin gets all access
+            defaultAccess = true;
+          } else if (roleKey === 'admin') {
+            // Admin gets most access except useraccess
+            defaultAccess = route.path !== '/useraccess';
+          } else if (['sales_manager', 'wellness_manager', 'relationship_manager'].includes(roleKey)) {
+            // Managers get access to their respective sections
+            const managerRoutes = [
+              '/dashboard',
+              '/analytics',
+              '/reports',
+              '/clients',
+              '/leads',
+              '/lead-information',
+              '/lead-assignment',
+              '/executives'
+            ];
+            defaultAccess = managerRoutes.includes(route.path);
+          } else if (['counselor', 'bde', 'customer_support', 'coach'].includes(roleKey)) {
+            // Minimum access for counselors, BDEs, customer support, coaches
+            const minimumAccessRoutes = [
+              '/dashboard',
+              '/clients',
+              '/leads',
+              '/lead-information'
+            ];
+            defaultAccess = minimumAccessRoutes.includes(route.path);
+          }
 
           defaultPermissions.push({
             role_id: role.id,
@@ -294,7 +388,7 @@ const fetchData = async () => {
   });
 
   const selectedRoleData = roles.find(role => role.id === selectedRole);
-  const isSuperadmin = selectedRoleData?.key === 'superadmin';
+  const isSuperAdmin = selectedRoleData?.key === 'superadmin';
 
   const getRoleStats = (roleId: string) => {
     const rolePermissions = permissions.filter(p => p.role_id === roleId);
@@ -334,11 +428,18 @@ const fetchData = async () => {
   );
 
   const bgFor = (roleKey: string) => {
-    if (roleKey === 'superadmin') return 'bg-indigo-100';
-    if (roleKey === 'admin') return 'bg-purple-100';
-    if (roleKey === 'executive') return 'bg-amber-100';
-    if (roleKey === 'manager') return 'bg-blue-100';
-    return 'bg-green-100';
+    const bgMap: Record<string, string> = {
+      'superadmin': 'bg-indigo-100',
+      'admin': 'bg-purple-100',
+      'sales_manager': 'bg-blue-100',
+      'wellness_manager': 'bg-pink-100',
+      'relationship_manager': 'bg-teal-100',
+      'counselor': 'bg-orange-100',
+      'bde': 'bg-cyan-100',
+      'customer_support': 'bg-yellow-100',
+      'coach': 'bg-green-100'
+    };
+    return bgMap[roleKey || ''] || 'bg-gray-100';
   };
 
   if (loading || !selectedRole) {
@@ -438,8 +539,14 @@ const fetchData = async () => {
                           className={`h-2 rounded-full transition-all duration-300 ${
                             role.key === 'superadmin' ? 'bg-indigo-500' :
                             role.key === 'admin' ? 'bg-purple-500' :
-                            role.key === 'executive' ? 'bg-amber-500' :
-                            role.key === 'manager' ? 'bg-blue-500' : 'bg-green-500'
+                            role.key === 'sales_manager' ? 'bg-blue-500' :
+                            role.key === 'wellness_manager' ? 'bg-pink-500' :
+                            role.key === 'relationship_manager' ? 'bg-teal-500' :
+                            role.key === 'counselor' ? 'bg-orange-500' :
+                            role.key === 'bde' ? 'bg-cyan-500' :
+                            role.key === 'customer_support' ? 'bg-yellow-500' :
+                            role.key === 'coach' ? 'bg-green-500' :
+                            'bg-gray-500'
                           }`}
                           style={{ width: `${percentage}%` }}
                         />
@@ -474,7 +581,7 @@ const fetchData = async () => {
                   ({getRoleStats(selectedRole).allowed} of {getRoleStats(selectedRole).total} routes accessible)
                 </span>
               </div>
-              {isSuperadmin && (
+              {isSuperAdmin && (
                 <div className="flex items-center space-x-2 text-indigo-600 bg-indigo-50 px-3 py-2 rounded-lg">
                   <Shield className="h-4 w-4" />
                   <span className="text-sm font-medium">Full Access</span>
@@ -538,12 +645,12 @@ const fetchData = async () => {
                           <PermissionToggle
                             checked={permission.can_access}
                             onChange={(value) => handlePermissionChange(permission.id, value)}
-                            disabled={isSuperadmin}
+                            disabled={isSuperAdmin}
                           />
                         </td>
                         
                         <td className="px-6 py-4 whitespace-nowrap text-center">
-                          {isSuperadmin ? (
+                          {isSuperAdmin ? (
                             <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
                               <Shield className="h-3 w-3 mr-1" />
                               Always Allowed
@@ -592,19 +699,19 @@ const fetchData = async () => {
 
             {/* Save Button */}
             <div className="flex items-center justify-between bg-white p-5 rounded-xl shadow-sm border border-gray-100">
-              {isSuperadmin && (
+              {isSuperAdmin && (
                 <p className="text-amber-600 flex items-center text-sm font-medium">
                   <AlertCircle className="h-4 w-4 mr-2" />
-                  Superadmin has all permissions by default
+                  Super Admin has all permissions by default
                 </p>
               )}
               <div className="flex-1"></div>
               <button
                 onClick={savePermissions}
-                disabled={saving || isSuperadmin}
+                disabled={saving || isSuperAdmin}
                 className={`
                   flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-colors shadow-sm
-                  ${saving || isSuperadmin
+                  ${saving || isSuperAdmin
                     ? 'bg-gray-100 text-gray-400 cursor-not-allowed' 
                     : 'bg-emerald-600 hover:bg-emerald-700 text-white'
                   }

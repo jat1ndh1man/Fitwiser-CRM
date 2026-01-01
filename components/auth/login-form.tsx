@@ -1,4 +1,3 @@
-// components/auth/login-form.tsx
 "use client"
 
 import type React from "react"
@@ -11,14 +10,20 @@ import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Loader2, Mail, Shield, CheckCircle, ArrowRight, KeyRound } from "lucide-react"
 import { signInWithOTP, verifyOTP } from "@/lib/supabase"
-import { supabase } from "@/lib/supabase" // Make sure you have this import
+import { supabase } from "@/lib/supabase"
 
-// Allowed role IDs
+// Updated allowed role IDs with all new roles
 const ALLOWED_ROLES = [
-  '11b93954-9a56-4ea5-a02c-15b731ee9dfb', // Manager
-  '1fe1759c-dc14-4933-947a-c240c046bcde', // Executive
-  '46e786df-0272-4f22-aec2-56d2a517fa9d', // Admin
-  'b00060fe-175a-459b-8f72-957055ee8c55'  // Superadmin
+  'b00060fe-175a-459b-8f72-957055ee8c55', // Superadmin
+  '46e786df-0272-4722-acc2-56d2a517fa9d', // Admin
+  '11b93954-9a56-4ea5-a02c-15b731ee9dfb', // Sales Manager
+  '5be42c54-a492-4604-90fa-57bced414143', // Wellness Manager
+  'e032e8eb-f50b-41e1-8d16-52b17fd0903f', // Relationship Manager
+  '7c9ade9a-31f8-4b7b-90a2-fb76362a5300', // Counselor
+  '37388da6-80d6-4b55-8b74-dd291ba1daf1', // BDE
+  '4bf4b01a-a6cb-4cb7-aaac-70de1e9b859e', // Customer Support
+  '874c7518-4b6f-421e-90f6-c57236dcee62', // Coach
+  '1fe1759c-dc14-4933-947a-c240c046bcde'  // Executive
 ]
 
 export function LoginForm() {

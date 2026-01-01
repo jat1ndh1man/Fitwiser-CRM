@@ -10,13 +10,20 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 })
 
-// Role IDs as constants - Update these with your actual role IDs from the database
+// Updated Role IDs with all new roles
 export const ROLE_IDS = {
   SUPERADMIN: "b00060fe-175a-459b-8f72-957055ee8c55",
-  ADMIN: "46e786df-0272-4f22-aec2-56d2a517fa9d",
-  MANAGER_1: "e032e8eb-f50b-41e1-8d16-52b17fd0903f",
-  MANAGER_2: "11b93954-9a56-4ea5-a02c-15b731ee9dfb",
+  ADMIN: "46e786df-0272-4722-acc2-56d2a517fa9d",
+  SALES_MANAGER: "11b93954-9a56-4ea5-a02c-15b731ee9dfb",
+  WELLNESS_MANAGER: "5be42c54-a492-4604-90fa-57bced414143",
+  RELATIONSHIP_MANAGER: "e032e8eb-f50b-41e1-8d16-52b17fd0903f",
+  COUNSELOR: "7c9ade9a-31f8-4b7b-90a2-fb76362a5300",
+  BDE: "37388da6-80d6-4b55-8b74-dd291ba1daf1",
+  CUSTOMER_SUPPORT: "4bf4b01a-a6cb-4cb7-aaac-70de1e9b859e",
+  COACH: "874c7518-4b6f-421e-90f6-c57236dcee62",
   EXECUTIVE: "1fe1759c-dc14-4933-947a-c240c046bcde",
+  TRAINING_MANAGER: "affa537b-beba-4a7c-a4e8-4a75d61a6486",
+  DIETITIAN: "e86ba6af-bbf5-4ce5-9ce3-eb41d4ce3b45"
 }
 
 export interface UserProfile {
@@ -33,8 +40,11 @@ export interface UserProfile {
 export interface UserSession {
   user: UserProfile
   canViewAllData: boolean
+  canManageTeam: boolean
+  isManager: boolean
   assignedLeadIds?: string[]
   roleName: string
+  roleKey: string
 }
 
 // Enhanced function to get current user session with RBAC
@@ -59,7 +69,7 @@ export async function getCurrentUserSession(): Promise<UserSession | null> {
         profile_image_url,
         created_at,
         updated_at,
-        roles!inner(name)
+        user_roles!inner(name)
       `)
       .eq("id", user.id)
       .single()
@@ -69,30 +79,58 @@ export async function getCurrentUserSession(): Promise<UserSession | null> {
       return null
     }
 
-    // Check if user can view all data (Superadmin, Admin, Managers)
-    const canViewAllData = [ROLE_IDS.SUPERADMIN, ROLE_IDS.ADMIN, ROLE_IDS.MANAGER_1, ROLE_IDS.MANAGER_2].includes(
-      profile.role_id,
-    )
+    // Get role name and create role key
+    const roleName = profile.user_roles?.name || "Unknown"
+    const roleKey = roleName.toLowerCase().replace(/\s+/g, '_')
+
+    // Define which roles can view all data (Superadmin, Admin, Managers)
+    const canViewAllData = [
+      ROLE_IDS.SUPERADMIN,
+      ROLE_IDS.ADMIN,
+      ROLE_IDS.SALES_MANAGER,
+      ROLE_IDS.WELLNESS_MANAGER,
+      ROLE_IDS.RELATIONSHIP_MANAGER,
+      ROLE_IDS.TRAINING_MANAGER
+    ].includes(profile.role_id)
+
+    // Define which roles can manage teams (Managers only)
+    const canManageTeam = [
+      ROLE_IDS.SALES_MANAGER,
+      ROLE_IDS.WELLNESS_MANAGER,
+      ROLE_IDS.RELATIONSHIP_MANAGER,
+      ROLE_IDS.TRAINING_MANAGER
+    ].includes(profile.role_id)
+
+    // Define manager roles
+    const isManager = [
+      ROLE_IDS.SALES_MANAGER,
+      ROLE_IDS.WELLNESS_MANAGER,
+      ROLE_IDS.RELATIONSHIP_MANAGER,
+      ROLE_IDS.TRAINING_MANAGER
+    ].includes(profile.role_id)
 
     let assignedLeadIds: string[] = []
 
-    // If user is Executive, get their assigned lead IDs
-    if (profile.role_id === ROLE_IDS.EXECUTIVE) {
+    // If user is Executive, BDE, or Counselor, get their assigned lead IDs
+    if ([ROLE_IDS.EXECUTIVE, ROLE_IDS.BDE, ROLE_IDS.COUNSELOR].includes(profile.role_id)) {
       const { data: assignments, error: assignmentErr } = await supabase
         .from("lead_assignments")
         .select("lead_id")
         .eq("assigned_to", profile.id)
 
       if (!assignmentErr && assignments) {
-        assignedLeadIds = assignments.map((a) => a.lead_id)
+        assignedLeadIds = assignments.map((a: any) => a.lead_id)
       }
     }
 
     return {
       user: profile,
       canViewAllData,
+      canManageTeam,
+      isManager,
       assignedLeadIds: canViewAllData ? undefined : assignedLeadIds,
-      roleName: profile.roles?.name || "Unknown",
+      roleName,
+      roleKey
     }
   } catch (error) {
     console.error("Error getting user session:", error)
@@ -117,11 +155,66 @@ export function canManageUsers(userSession: UserSession | null): boolean {
 }
 
 export function canViewReports(userSession: UserSession | null): boolean {
-  return hasPermission(userSession, [ROLE_IDS.SUPERADMIN, ROLE_IDS.ADMIN, ROLE_IDS.MANAGER_1, ROLE_IDS.MANAGER_2])
+  // Allow Superadmin, Admin, and all Managers to view reports
+  return hasPermission(userSession, [
+    ROLE_IDS.SUPERADMIN,
+    ROLE_IDS.ADMIN,
+    ROLE_IDS.SALES_MANAGER,
+    ROLE_IDS.WELLNESS_MANAGER,
+    ROLE_IDS.RELATIONSHIP_MANAGER,
+    ROLE_IDS.TRAINING_MANAGER
+  ])
 }
 
 export function canEditLeads(userSession: UserSession | null): boolean {
-  return hasPermission(userSession, [ROLE_IDS.SUPERADMIN, ROLE_IDS.ADMIN, ROLE_IDS.MANAGER_1, ROLE_IDS.MANAGER_2])
+  // Allow Superadmin, Admin, Managers, and Executive to edit leads
+  return hasPermission(userSession, [
+    ROLE_IDS.SUPERADMIN,
+    ROLE_IDS.ADMIN,
+    ROLE_IDS.SALES_MANAGER,
+    ROLE_IDS.WELLNESS_MANAGER,
+    ROLE_IDS.RELATIONSHIP_MANAGER,
+    ROLE_IDS.TRAINING_MANAGER,
+    ROLE_IDS.EXECUTIVE
+  ])
+}
+
+export function canViewAnalytics(userSession: UserSession | null): boolean {
+  // Allow Superadmin, Admin, and Managers to view analytics
+  return hasPermission(userSession, [
+    ROLE_IDS.SUPERADMIN,
+    ROLE_IDS.ADMIN,
+    ROLE_IDS.SALES_MANAGER,
+    ROLE_IDS.WELLNESS_MANAGER,
+    ROLE_IDS.RELATIONSHIP_MANAGER,
+    ROLE_IDS.TRAINING_MANAGER
+  ])
+}
+
+export function canAccessSettings(userSession: UserSession | null): boolean {
+  // Allow only Superadmin and Admin to access settings
+  return hasPermission(userSession, [ROLE_IDS.SUPERADMIN, ROLE_IDS.ADMIN])
+}
+
+export function canAccessUserManagement(userSession: UserSession | null): boolean {
+  // Allow only Superadmin and Admin to access user management
+  return hasPermission(userSession, [ROLE_IDS.SUPERADMIN, ROLE_IDS.ADMIN])
+}
+
+export function getRolePermissions(userSession: UserSession | null) {
+  if (!userSession) return {}
+  
+  return {
+    canManageUsers: canManageUsers(userSession),
+    canViewReports: canViewReports(userSession),
+    canEditLeads: canEditLeads(userSession),
+    canViewAnalytics: canViewAnalytics(userSession),
+    canAccessSettings: canAccessSettings(userSession),
+    canAccessUserManagement: canAccessUserManagement(userSession),
+    canViewAllData: userSession.canViewAllData,
+    canManageTeam: userSession.canManageTeam,
+    isManager: userSession.isManager
+  }
 }
 
 // Your existing auth functions (keeping them for compatibility)
@@ -129,7 +222,7 @@ export const signInWithOTP = async (email: string) => {
   const { data, error } = await supabase.auth.signInWithOtp({
     email,
     options: {
-      shouldCreateUser: true,
+      shouldCreateUser: false,
     },
   })
   return { data, error }
@@ -161,6 +254,7 @@ export const verifyOTP = async ({
   if (userSession) {
     // 3. Store the enhanced session in localStorage
     localStorage.setItem("userSession", JSON.stringify(userSession))
+    localStorage.setItem("userProfile", JSON.stringify(userSession.user))
   }
 
   return { data, error }

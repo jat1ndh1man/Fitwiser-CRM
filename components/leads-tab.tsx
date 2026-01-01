@@ -553,17 +553,25 @@ const fetchLeads = async () => {
   }, [leads, searchTerm, statusFilter, sourceFilter, counselorFilter, priorityFilter, dateRange, sortField, sortDirection])
 
   // Calculate stats
-  const stats = {
-    total: leads.length,
-    new: leads.filter((l) => l.status === "New").length,
-    hot: leads.filter((l) => l.status === "Hot").length,
-    warm: leads.filter((l) => l.status === "Warm").length,
-    cold: leads.filter((l) => l.status === "Cold").length,
-    failed: leads.filter((l) => l.status === "Failed").length,
-    conversionRate: leads.length > 0 ? ((leads.filter((l) => ["Hot", "Warm"].includes(l.status)).length / leads.length) * 100).toFixed(1) : "0",
-    avgLeadScore: leads.length > 0 ? (leads.reduce((sum, l) => sum + l.lead_score, 0) / leads.length).toFixed(0) : "0",
-    highPriority: leads.filter((l) => l.priority === "High").length,
+const stats = useMemo(() => {
+  const data = filteredAndSortedLeads
+
+  return {
+    total: data.length,
+    new: data.filter(l => l.status === "New").length,
+    hot: data.filter(l => l.status === "Hot").length,
+    warm: data.filter(l => l.status === "Warm").length,
+    cold: data.filter(l => l.status === "Cold").length,
+    failed: data.filter(l => l.status === "Failed").length,
+    conversionRate: data.length
+      ? ((data.filter(l => ["Hot", "Warm"].includes(l.status)).length / data.length) * 100).toFixed(1)
+      : "0",
+    avgLeadScore: data.length
+      ? (data.reduce((sum, l) => sum + l.lead_score, 0) / data.length).toFixed(0)
+      : "0",
+    highPriority: data.filter(l => l.priority === "High").length,
   }
+}, [filteredAndSortedLeads])
 
   // Get unique counselors for filter
   const uniqueCounselors = [...new Set(leads.map(l => l.counselor).filter(Boolean))]
@@ -887,7 +895,7 @@ const fetchLeads = async () => {
           </CardContent>
         </Card>
 
-        <Card className="border-0 shadow-lg bg-gradient-to-br from-teal-50 to-cyan-50 hover:shadow-xl transition-all">
+        {/* <Card className="border-0 shadow-lg bg-gradient-to-br from-teal-50 to-cyan-50 hover:shadow-xl transition-all">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2 text-teal-700">
               <Target className="h-4 w-4" />
@@ -898,7 +906,7 @@ const fetchLeads = async () => {
             <div className="text-2xl font-bold text-teal-600">{stats.avgLeadScore}</div>
             <p className="text-xs text-slate-600">Out of 100</p>
           </CardContent>
-        </Card>
+        </Card> */}
 
         <Card className="border-0 shadow-lg bg-gradient-to-br from-rose-50 to-pink-50 hover:shadow-xl transition-all">
           <CardHeader className="pb-2">
@@ -1080,7 +1088,7 @@ const fetchLeads = async () => {
                         value={formData.budget}
                         onChange={(e) => setFormData(prev => ({...prev, budget: e.target.value}))}
                         className="border-emerald-200"
-                        placeholder="e.g., $1000-2000"
+                        placeholder="e.g., ₹10000-20000"
                       />
                     </div>
                     <div className="space-y-2">
@@ -1485,7 +1493,7 @@ const fetchLeads = async () => {
           <CardContent>
             <div className="space-y-4">
               {["Website", "Social Media", "Referral", "Cold Call"].map((source) => {
-                const sourceLeads = leads.filter((l) => l.source === source)
+                const sourceLeads = filteredAndSortedLeads.filter(l => l.source === source)
                 const conversionRate = sourceLeads.length
                   ? (
                       (sourceLeads.filter((l) => ["Hot", "Warm"].includes(l.status)).length / sourceLeads.length) *

@@ -17,24 +17,26 @@ const DATABASE_SCHEMA = `
 You are a CRM database assistant for a fitness coaching business. Convert natural language to Supabase queries.
 
 IMPORTANT RULES:
-- ONLY generate SELECT queries for data retrieval
-- Always include reasonable LIMIT clauses (max 100 records)
-- Use simple joins to get names instead of IDs when possible
+- Generate ANY type of Supabase query (SELECT, INSERT, UPDATE, DELETE) based on user request
+- For SELECT queries, DO NOT apply LIMIT unless specifically requested by the user
+- Use intelligent joins to get names instead of IDs when possible
 - Return ONLY the JavaScript code without explanations or markdown
+- For UPDATE/DELETE queries, include proper WHERE clauses to prevent accidental mass updates
+- For INSERT queries, include all required fields from the schema
 
 ACTUAL DATABASE SCHEMA:
 
 1. users table (clients and coaches):
-   - id (uuid), email, phone, first_name, last_name, role_id (uuid)
+   - id (uuid, primary key), email (unique), phone, first_name, last_name, role_id (uuid, foreign key)
    - is_active (boolean), age, gender, height, current_weight, target_weight
    - fitness_level, primary_goal, fitness_goal, activity_level, bio, specialty
    - created_at, updated_at, last_login
 
 2. user_roles table:
-   - id (uuid), name, description, created_at
+   - id (uuid, primary key), name, description, created_at
 
 3. leads table:
-   - id (uuid), name, email, phone_number, city, profession
+   - id (uuid, primary key), name, email, phone_number, city, profession
    - status ('New', 'Contacted', 'Qualified', 'Converted', 'Lost')
    - source, counselor, priority ('High', 'Medium', 'Low')
    - lead_score (0-100), conversion_probability (0-100)
@@ -42,69 +44,61 @@ ACTUAL DATABASE SCHEMA:
    - created_at, updated_at
 
 4. manual_payment table:
-   - id (uuid), user_id (foreign key to users), lead_id (foreign key to leads)
+   - id (uuid, primary key), user_id (uuid, foreign key to users), lead_id (uuid, foreign key to leads)
    - amount, currency, description, payment_method, status
    - payment_date, plan, plan_expiry, created_at
 
 5. payment_links table:
-   - id (uuid), user_id (foreign key to users), lead_id (foreign key to leads)
+   - id (uuid, primary key), user_id (uuid, foreign key to users), lead_id (uuid, foreign key to leads)
    - amount, currency, description, status, payment_date
    - plan, plan_expiry, is_manual, created_at
 
 6. client_coach_relationships table:
-   - id, client_id (foreign key to users), coach_id (foreign key to users)
+   - id (uuid, primary key), client_id (uuid, foreign key to users), coach_id (uuid, foreign key to users)
    - start_date, end_date, status ('active', 'inactive')
    - created_at, updated_at
 
-QUERY PATTERNS (Prefer joins to show names instead of IDs):
+QUERY EXAMPLES:
 
-Basic queries:
-"Show me all leads" -> supabase.from('leads').select('*').order('created_at', { ascending: false }).limit(50)
+SELECT QUERIES (without limits unless specified):
+"Show me all leads" -> supabase.from('leads').select('*').order('created_at', { ascending: false })
+"Show me 50 users" -> supabase.from('users').select('id, first_name, last_name, email, phone, specialty, primary_goal, is_active, created_at').order('created_at', { ascending: false }).limit(50)
+"Count all users" -> supabase.from('users').select('*', { count: 'exact', head: true })
 
-"Show me all users" -> supabase.from('users').select('id, first_name, last_name, email, phone, specialty, primary_goal, is_active, created_at').order('created_at', { ascending: false }).limit(50)
+INSERT QUERIES:
+"Add a new user named John Doe" -> supabase.from('users').insert([{ first_name: 'John', last_name: 'Doe', email: 'john@example.com', is_active: true, created_at: new Date().toISOString() }])
+"Create a new lead" -> supabase.from('leads').insert([{ name: 'New Lead', email: 'lead@example.com', status: 'New', created_at: new Date().toISOString() }])
 
-"Show payments with user names" -> supabase.from('manual_payment').select('*, users(first_name, last_name, email)').order('payment_date', { ascending: false }).limit(50)
+UPDATE QUERIES:
+"Update user status to inactive" -> supabase.from('users').update({ is_active: false }).eq('id', 'specific-user-id-here')
+"Mark lead as converted" -> supabase.from('leads').update({ status: 'Converted', updated_at: new Date().toISOString() }).eq('id', 'specific-lead-id-here')
 
-"Show coach relationships with names" -> supabase.from('client_coach_relationships').select('*, client:users!client_id(first_name, last_name, email), coach:users!coach_id(first_name, last_name, specialty)').eq('status', 'active').limit(50)
+DELETE QUERIES:
+"Delete a specific user" -> supabase.from('users').delete().eq('id', 'specific-user-id-here')
+"Remove old inactive leads" -> supabase.from('leads').delete().eq('status', 'Lost').lt('updated_at', new Date(Date.now() - 90*24*60*60*1000).toISOString())
 
-Count queries:
-"How many leads?" -> supabase.from('leads').select('*', { count: 'exact', head: true })
+JOIN EXAMPLES:
+"Show payments with user names" -> supabase.from('manual_payment').select('*, users!inner(first_name, last_name, email)').order('payment_date', { ascending: false })
+"Show all client-coach relationships" -> supabase.from('client_coach_relationships').select('*, client:users!client_id(first_name, last_name, email), coach:users!coach_id(first_name, last_name, specialty)')
 
-"How many users?" -> supabase.from('users').select('*', { count: 'exact', head: true }).eq('is_active', true)
+COMPLEX QUERIES:
+"Find users without coaches" -> supabase.from('users').select('*').not('id', 'in', supabase.from('client_coach_relationships').select('client_id')).eq('is_active', true)
+"Get leads with high conversion probability" -> supabase.from('leads').select('*').gt('conversion_probability', 75).order('conversion_probability', { ascending: false })
 
-Filtered queries:
-"High priority leads" -> supabase.from('leads').select('*').eq('priority', 'High').order('created_at', { ascending: false }).limit(30)
+IMPORTANT:
+- Always use .eq() or .in() for UPDATE/DELETE to avoid mass updates
+- For INSERT, include created_at timestamp
+- For UPDATE, include updated_at timestamp
+- Use proper error handling in production
 
-"Active users" -> supabase.from('users').select('id, first_name, last_name, email, phone, specialty, primary_goal, is_active').eq('is_active', true).order('created_at', { ascending: false }).limit(50)
-
-"Recent payments" -> supabase.from('manual_payment').select('*, users(first_name, last_name, email)').gte('payment_date', new Date(Date.now() - 7*24*60*60*1000).toISOString().split('T')[0]).order('payment_date', { ascending: false }).limit(50)
-
-Date-based queries:
-"Today's leads" -> supabase.from('leads').select('*').gte('created_at', new Date().toISOString().split('T')[0]).order('created_at', { ascending: false }).limit(50)
-
-"This month's payments" -> supabase.from('manual_payment').select('*, users(first_name, last_name, email)').gte('payment_date', new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]).order('payment_date', { ascending: false }).limit(100)
-
-Advanced queries with names:
-"Users by role" -> supabase.from('users').select('id, first_name, last_name, email, specialty, primary_goal, is_active, role_id').limit(50)
-
-"Payment links with user names" -> supabase.from('payment_links').select('*, users(first_name, last_name, email)').order('created_at', { ascending: false }).limit(50)
-
-IMPORTANT NOTES:
-- Always try to include user names instead of just IDs
-- Use joins like users(first_name, last_name, email) to get names
-- For relationships, use proper foreign key notation: users!client_id(...)
-- Lead status values: 'New', 'Contacted', 'Qualified', 'Converted', 'Lost'
-- Priority values: 'High', 'Medium', 'Low'
-- Payment status: 'completed', 'pending', 'failed'
-
-Return ONLY the query code without any explanations.
+Return ONLY the JavaScript query code.
 `;
 
 const rateLimitMap = new Map<string, number[]>();
 
 function rateLimit(ip: string): boolean {
   const now = Date.now();
-  const limit = 30;
+  const limit = 100; // Increased limit
   const windowMs = 60000;
   
   const userRequests = rateLimitMap.get(ip) || [];
@@ -121,9 +115,9 @@ function rateLimit(ip: string): boolean {
 
 export async function POST(request: NextRequest) {
   try {
-    console.log('=== API Request Started ===');
+    console.log('=== Enhanced CRM API Started ===');
     
-    // Rate limiting
+    // Rate limiting (increased limits)
     const ip = request.ip || request.headers.get('x-forwarded-for') || 'anonymous';
     if (!rateLimit(ip)) {
       return NextResponse.json(
@@ -134,12 +128,12 @@ export async function POST(request: NextRequest) {
 
     // Parse request
     const body = await request.json();
-    const { message } = body;
-    console.log('User message:', message);
+    const { message, actionType = 'query' } = body;
+    console.log('User message:', message, 'Action type:', actionType);
 
-    if (!message || typeof message !== 'string' || message.length > 500) {
+    if (!message || typeof message !== 'string' || message.length > 2000) {
       return NextResponse.json(
-        { error: 'Please provide a valid question (under 500 characters).' },
+        { error: 'Please provide a valid request (under 2000 characters).' },
         { status: 400 }
       );
     }
@@ -161,28 +155,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check for harmful queries
-    const dangerousKeywords = ['drop', 'truncate', 'delete', 'update', 'insert', 'alter', 'create'];
-    if (dangerousKeywords.some(keyword => message.toLowerCase().includes(keyword))) {
-      return NextResponse.json(
-        { error: 'I can only help you retrieve and analyze data, not modify it.' },
-        { status: 400 }
-      );
-    }
-
     console.log('Generating AI response...');
 
     // Generate query using OpenAI
     let completion;
     try {
       completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-4",
         messages: [
           { role: "system", content: DATABASE_SCHEMA },
           { role: "user", content: `Convert this to a Supabase query: "${message}"` }
         ],
         temperature: 0.1,
-        max_tokens: 300,
+        max_tokens: 1000,
       });
     } catch (openaiError: any) {
       console.error('OpenAI API Error:', openaiError);
@@ -202,202 +187,94 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Execute the query with fallback for relationship errors
+    // Execute the query
     console.log('Executing database query...');
-    const result = await executeSupabaseQueryWithFallback(queryCode, message);
-    console.log('Query result:', { 
-      dataLength: Array.isArray(result.data) ? result.data.length : 'not array',
+    const result = await executeSupabaseQuery(queryCode);
+    
+    console.log('Query executed successfully:', { 
+      dataLength: Array.isArray(result.data) ? result.data.length : 'single object',
       count: result.count,
-      total: result.total 
+      total: result.total,
+      hasData: !!(result.data)
     });
     
-    // Format the response for human readability
-    const humanResponse = await formatHumanReadableResponse(result, message, queryCode);
-    console.log('Formatted response generated');
+    // Format comprehensive response
+    const humanResponse = await formatComprehensiveResponse(result, message, queryCode);
+    console.log('Response formatted successfully');
 
     return NextResponse.json({ 
       success: true,
       message: humanResponse,
+      data: result.data,
       recordCount: result.total || 0,
+      query: queryCode,
       timestamp: new Date().toISOString()
     });
 
   } catch (error: any) {
     console.error('=== API Error ===', error);
-    console.error('Error stack:', error.stack);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack
+    });
     
-    // Return user-friendly error messages
-    let publicError = 'I encountered an issue processing your request. Please try again.';
+    // Provide detailed error information
+    let publicError = 'An error occurred while processing your request.';
+    let statusCode = 500;
     
-    if (error.message.includes('couldn\'t understand') ||
-        error.message.includes('can only help you') ||
-        error.message.includes('temporarily unavailable')) {
-      publicError = error.message;
-    } else if (error.message.includes('Database error')) {
-      publicError = 'There was an issue accessing the database. Please try again.';
-    } else if (error.message.includes('Query execution failed')) {
-      publicError = 'I had trouble processing your query. Could you try rephrasing it?';
+    if (error.message.includes('timeout')) {
+      publicError = 'The query timed out. Please try a more specific request or contact support.';
+      statusCode = 408;
+    } else if (error.message.includes('permission denied')) {
+      publicError = 'You don\'t have permission to perform this action.';
+      statusCode = 403;
+    } else if (error.message.includes('invalid input')) {
+      publicError = 'Invalid input provided. Please check your request parameters.';
+      statusCode = 400;
     }
 
     return NextResponse.json(
-      { error: publicError },
-      { status: 500 }
+      { 
+        error: publicError,
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+        timestamp: new Date().toISOString()
+      },
+      { status: statusCode }
     );
   }
-}
-
-async function executeSupabaseQueryWithFallback(queryCode: string, originalMessage: string): Promise<any> {
-  try {
-    // First try the original query
-    return await executeSupabaseQuery(queryCode);
-  } catch (error: any) {
-    console.log('Primary query failed, trying fallback:', error.message);
-    
-    // If it's a relationship error, try a simpler fallback query
-    if (error.message.includes('relationship') || error.message.includes('foreign key')) {
-      console.log('Attempting fallback query without joins...');
-      
-      const fallbackQuery = generateFallbackQuery(originalMessage);
-      if (fallbackQuery) {
-        try {
-          const fallbackResult = await executeSupabaseQuery(fallbackQuery);
-          // Enhance the data with names if possible
-          return await enhanceDataWithNames(fallbackResult, originalMessage);
-        } catch (fallbackError) {
-          console.log('Fallback query also failed:', fallbackError);
-          throw error; // Throw original error
-        }
-      }
-    }
-    
-    throw error;
-  }
-}
-
-function generateFallbackQuery(message: string): string | null {
-  const lowerMessage = message.toLowerCase();
-  
-  if (lowerMessage.includes('payment') && lowerMessage.includes('user')) {
-    return "supabase.from('manual_payment').select('*').order('payment_date', { ascending: false }).limit(50)";
-  }
-  
-  if (lowerMessage.includes('coach') && lowerMessage.includes('relationship')) {
-    return "supabase.from('client_coach_relationships').select('*').eq('status', 'active').limit(50)";
-  }
-  
-  if (lowerMessage.includes('user') && !lowerMessage.includes('count')) {
-    return "supabase.from('users').select('id, first_name, last_name, email, phone, specialty, primary_goal, is_active, created_at').order('created_at', { ascending: false }).limit(50)";
-  }
-  
-  return null;
-}
-
-async function enhanceDataWithNames(result: any, originalMessage: string): Promise<any> {
-  if (!result.data || !Array.isArray(result.data) || result.data.length === 0) {
-    return result;
-  }
-  
-  const lowerMessage = originalMessage.toLowerCase();
-  
-  // Enhance payment data with user names
-  if (lowerMessage.includes('payment') && result.data.some((item: any) => item.user_id)) {
-    console.log('Enhancing payment data with user names...');
-    
-    try {
-      const userIds = [...new Set(result.data.map((item: any) => item.user_id).filter(Boolean))];
-      
-      if (userIds.length > 0) {
-        const { data: users } = await supabase
-          .from('users')
-          .select('id, first_name, last_name, email')
-          .in('id', userIds);
-        
-        if (users) {
-          const userMap = new Map(users.map(user => [user.id, user]));
-          
-          result.data = result.data.map((payment: any) => ({
-            ...payment,
-            user: userMap.get(payment.user_id) || null
-          }));
-        }
-      }
-    } catch (enhanceError) {
-      console.log('Failed to enhance with user names:', enhanceError);
-      // Return original data if enhancement fails
-    }
-  }
-  
-  // Enhance coach relationship data with user names
-  if (lowerMessage.includes('coach') && lowerMessage.includes('relationship')) {
-    console.log('Enhancing relationship data with user names...');
-    
-    try {
-      const allUserIds = new Set();
-      result.data.forEach((rel: any) => {
-        if (rel.client_id) allUserIds.add(rel.client_id);
-        if (rel.coach_id) allUserIds.add(rel.coach_id);
-      });
-      
-      if (allUserIds.size > 0) {
-        const { data: users } = await supabase
-          .from('users')
-          .select('id, first_name, last_name, email, specialty')
-          .in('id', Array.from(allUserIds));
-        
-        if (users) {
-          const userMap = new Map(users.map(user => [user.id, user]));
-          
-          result.data = result.data.map((rel: any) => ({
-            ...rel,
-            client: userMap.get(rel.client_id) || null,
-            coach: userMap.get(rel.coach_id) || null
-          }));
-        }
-      }
-    } catch (enhanceError) {
-      console.log('Failed to enhance relationship data:', enhanceError);
-    }
-  }
-  
-  return result;
 }
 
 async function executeSupabaseQuery(queryCode: string): Promise<any> {
   try {
     console.log('Raw query code:', queryCode);
     
-    // Clean and validate the query
+    // Clean the query
     const cleanQuery = queryCode
-      .replace(/```javascript|```js|```/g, '') // Remove code blocks
-      .replace(/[\n\r\t]/g, ' ') // Remove newlines and tabs
+      .replace(/```javascript|```js|```/g, '')
+      .replace(/[\n\r\t]/g, ' ')
       .trim();
     
     console.log('Cleaned query:', cleanQuery);
     
+    if (!cleanQuery || cleanQuery.length < 5) {
+      throw new Error('Generated query is invalid');
+    }
+
     // Enhanced validation
-    if (!cleanQuery || cleanQuery.length < 10) {
-      throw new Error('Generated query is too short or empty');
-    }
-
-    if (!cleanQuery.includes('supabase.from(')) {
-      throw new Error('Query must start with supabase.from()');
-    }
-
-    if (!cleanQuery.includes('.select(')) {
-      throw new Error('Query must include a .select() method');
-    }
-
-    // Check for forbidden operations
-    const forbiddenOperations = ['.insert(', '.update(', '.delete(', '.upsert(', 'DROP', 'DELETE', 'UPDATE', 'INSERT'];
-    const foundForbidden = forbiddenOperations.find(op => 
-      cleanQuery.toUpperCase().includes(op.toUpperCase())
-    );
+    const validOperations = ['.select(', '.insert(', '.update(', '.delete(', '.upsert('];
+    const isValidOperation = validOperations.some(op => cleanQuery.includes(op));
     
-    if (foundForbidden) {
-      throw new Error(`Forbidden operation detected: ${foundForbidden}`);
+    if (!isValidOperation) {
+      throw new Error('Invalid query operation');
     }
 
-    // Execute query
+    // Security check: Prevent mass UPDATE/DELETE without WHERE clause
+    if (cleanQuery.includes('.update(') || cleanQuery.includes('.delete(')) {
+      if (!cleanQuery.includes('.eq(') && !cleanQuery.includes('.in(') && !cleanQuery.includes('.match(')) {
+        throw new Error('UPDATE/DELETE queries must include a WHERE clause (eq, in, or match)');
+      }
+    }
+
     console.log('Executing query with Supabase...');
     
     let query;
@@ -405,34 +282,34 @@ async function executeSupabaseQuery(queryCode: string): Promise<any> {
       const executeQuery = new Function(
         'supabase', 
         'Date', 
-        'console',
         `
         try {
-          return ${cleanQuery};
+          const query = ${cleanQuery};
+          if (!query) throw new Error('Query returned undefined');
+          return query;
         } catch (e) {
-          throw new Error('Query syntax error: ' + e.message);
+          throw new Error('Query execution error: ' + e.message);
         }
         `
       );
       
-      query = executeQuery(supabase, Date, { log: () => {} });
+      query = executeQuery(supabase, Date);
     } catch (syntaxError: any) {
       console.error('Query syntax error:', syntaxError);
-      throw new Error(`Invalid query syntax: ${syntaxError.message}`);
+      throw new Error(`Query syntax error: ${syntaxError.message}`);
     }
 
     if (!query || typeof query.then !== 'function') {
-      throw new Error('Generated query is not a valid Supabase query');
+      throw new Error('Generated code is not a valid Supabase query');
     }
 
-    // Execute with timeout
+    // Execute with generous timeout
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Database query timeout')), 15000)
+      setTimeout(() => reject(new Error('Database query timeout (30s)')), 30000)
     );
 
     const result = await Promise.race([query, timeoutPromise]);
-    console.log('Raw database result keys:', Object.keys(result || {}));
-
+    
     if (!result) {
       throw new Error('Database returned no response');
     }
@@ -444,10 +321,14 @@ async function executeSupabaseQuery(queryCode: string): Promise<any> {
       throw new Error(`Database error: ${error.message || 'Unknown database error'}`);
     }
 
+    // For INSERT/UPDATE/DELETE operations, data might be an array of affected rows
+    const totalCount = count || (Array.isArray(data) ? data.length : (data ? 1 : 0));
+    
     return {
       data: data || [],
       count: count,
-      total: count !== undefined ? count : (Array.isArray(data) ? data.length : (data ? 1 : 0))
+      total: totalCount,
+      raw: result
     };
 
   } catch (error: any) {
@@ -456,146 +337,218 @@ async function executeSupabaseQuery(queryCode: string): Promise<any> {
   }
 }
 
-async function formatHumanReadableResponse(result: any, originalQuery: string, queryCode: string): Promise<string> {
+async function formatComprehensiveResponse(result: any, originalQuery: string, queryCode: string): Promise<string> {
   const { data, count, total } = result;
   const lowerQuery = originalQuery.toLowerCase();
+  
+  let response = '## 📊 CRM Query Results\n\n';
+
+  // Check operation type
+  const isSelect = queryCode.includes('.select(');
+  const isInsert = queryCode.includes('.insert(');
+  const isUpdate = queryCode.includes('.update(');
+  const isDelete = queryCode.includes('.delete(');
+
+  // Operation-specific messaging
+  if (isInsert) {
+    response += `✅ **Records Inserted Successfully**\n\n`;
+    response += `Added ${total} new record${total !== 1 ? 's' : ''} to the database.\n\n`;
+  } else if (isUpdate) {
+    response += `🔄 **Records Updated Successfully**\n\n`;
+    response += `Updated ${total} record${total !== 1 ? 's' : ''} in the database.\n\n`;
+  } else if (isDelete) {
+    response += `🗑️ **Records Deleted Successfully**\n\n`;
+    response += `Removed ${total} record${total !== 1 ? 's' : ''} from the database.\n\n`;
+  }
 
   // Handle empty results
   if (!data || (Array.isArray(data) && data.length === 0)) {
-    return getEmptyResultMessage(originalQuery);
+    if (isSelect) {
+      return response + getEmptyResultMessage(originalQuery);
+    }
+    return response + 'No records were affected by this operation.';
   }
 
-  // Handle count queries
+  // Handle count-only queries
   if (count !== undefined && count !== null && (!data || data.length === 0)) {
-    return getCountMessage(count, originalQuery);
+    return response + getCountMessage(count, originalQuery);
   }
 
   // Handle data results
   if (Array.isArray(data) && data.length > 0) {
-    return formatArrayResults(data, originalQuery);
+    if (isSelect) {
+      response += formatArrayResults(data, originalQuery);
+    } else {
+      response += `**Operation completed successfully.**\n\n`;
+      response += `Affected records:\n`;
+      
+      data.slice(0, 10).forEach((record: any, index: number) => {
+        response += `${index + 1}. ${formatOperationRecord(record)}\n`;
+      });
+      
+      if (data.length > 10) {
+        response += `\n... and ${data.length - 10} more record${data.length - 10 !== 1 ? 's' : ''}.`;
+      }
+    }
+  } else if (data && typeof data === 'object') {
+    response += `**Single Record Result**\n\n`;
+    response += formatSingleRecord(data);
   }
 
-  // Handle single object results
-  if (data && typeof data === 'object') {
-    return `Here's what I found:\n\n${formatSingleRecord(data)}`;
+  // Add metadata
+  response += `\n\n---\n`;
+  response += `**Query Summary:**\n`;
+  response += `• Total records: ${total || 'N/A'}\n`;
+  response += `• Operation: ${getOperationType(queryCode)}\n`;
+  response += `• Timestamp: ${new Date().toLocaleString()}\n`;
+  
+  // Add insights for SELECT queries
+  if (isSelect && Array.isArray(data) && data.length > 0) {
+    response += getEnhancedInsights(data, originalQuery);
   }
 
-  return `I found ${total || 0} record${total !== 1 ? 's' : ''} for your query.`;
+  return response;
+}
+
+function formatOperationRecord(record: any): string {
+  if (record.id) {
+    let formatted = `ID: ${record.id.substring(0, 8)}...`;
+    
+    // Add meaningful fields based on table
+    if (record.name) formatted += ` | Name: ${record.name}`;
+    if (record.first_name || record.last_name) {
+      formatted += ` | Name: ${record.first_name || ''} ${record.last_name || ''}`.trim();
+    }
+    if (record.email) formatted += ` | Email: ${record.email}`;
+    if (record.status) formatted += ` | Status: ${record.status}`;
+    if (record.amount) formatted += ` | Amount: ₹${record.amount}`;
+    
+    return formatted;
+  }
+  
+  // For operations that return minimal data
+  const keys = Object.keys(record).slice(0, 3);
+  return keys.map(key => `${key}: ${record[key]}`).join(' | ');
+}
+
+function getOperationType(queryCode: string): string {
+  if (queryCode.includes('.select(')) return 'SELECT';
+  if (queryCode.includes('.insert(')) return 'INSERT';
+  if (queryCode.includes('.update(')) return 'UPDATE';
+  if (queryCode.includes('.delete(')) return 'DELETE';
+  return 'UNKNOWN';
 }
 
 function getEmptyResultMessage(query: string): string {
   const lowerQuery = query.toLowerCase();
   
+  const messages = [
+    "📭 No records found matching your criteria.",
+    "🔍 Your search returned zero results.",
+    "📋 No data available for the specified parameters.",
+    "👀 Nothing found. Try broadening your search criteria."
+  ];
+  
+  let specific = '';
+  
   if (lowerQuery.includes('today') || lowerQuery.includes('recent')) {
-    return "📊 No recent activity found. Everything's quiet today!";
-  }
-  if (lowerQuery.includes('lead')) {
-    return "📋 No leads found matching your criteria. Time to boost those marketing efforts!";
-  }
-  if (lowerQuery.includes('client') || lowerQuery.includes('user')) {
-    return "👥 No users found matching your search criteria.";
-  }
-  if (lowerQuery.includes('payment') || lowerQuery.includes('revenue')) {
-    return "💰 No payment records found for your specified criteria.";
-  }
-  if (lowerQuery.includes('coach')) {
-    return "💪 No coaches found matching your criteria.";
+    specific = " No activity recorded for the specified time period.";
+  } else if (lowerQuery.includes('lead')) {
+    specific = " No leads match your search criteria.";
+  } else if (lowerQuery.includes('client') || lowerQuery.includes('user')) {
+    specific = " No users found with those parameters.";
+  } else if (lowerQuery.includes('payment')) {
+    specific = " No payment records found.";
   }
   
-  return "🔍 No results found for your query. Try adjusting your search criteria.";
+  return messages[Math.floor(Math.random() * messages.length)] + specific;
 }
 
 function getCountMessage(count: number, query: string): string {
   const lowerQuery = query.toLowerCase();
   
-  if (lowerQuery.includes('lead')) {
-    return `📋 **${count}** lead${count !== 1 ? 's' : ''} found. ${getLeadInsight(count)}`;
-  }
-  if (lowerQuery.includes('client') || lowerQuery.includes('user')) {
-    return `👥 **${count}** user${count !== 1 ? 's' : ''} found. ${getClientInsight(count)}`;
-  }
-  if (lowerQuery.includes('coach')) {
-    return `💪 **${count}** coach${count !== 1 ? 'es' : ''} found.`;
-  }
-  if (lowerQuery.includes('payment')) {
-    return `💰 **${count}** payment${count !== 1 ? 's' : ''} found.`;
-  }
+  let entity = 'records';
+  if (lowerQuery.includes('lead')) entity = 'leads';
+  else if (lowerQuery.includes('client') || lowerQuery.includes('user')) entity = 'users';
+  else if (lowerQuery.includes('coach')) entity = 'coaches';
+  else if (lowerQuery.includes('payment')) entity = 'payments';
   
-  return `📊 Found **${count}** record${count !== 1 ? 's' : ''} matching your criteria.`;
+  return `**${count}** ${entity} found in total.`;
 }
 
 function formatArrayResults(data: any[], query: string): string {
   const lowerQuery = query.toLowerCase();
   const recordCount = data.length;
-  const showLimit = 5;
   
   let response = '';
   
-  // Add context-specific headers
+  // Determine entity type
   if (lowerQuery.includes('lead')) {
-    response += `📋 Found ${recordCount} Lead${recordCount !== 1 ? 's' : ''}\n\n`;
+    response += `📋 **${recordCount} Leads**\n\n`;
   } else if (lowerQuery.includes('client') || lowerQuery.includes('user')) {
-    response += `👥 Found ${recordCount} User${recordCount !== 1 ? 's' : ''}\n\n`;
-  } else if (lowerQuery.includes('coach')) {
-    response += `💪 Found ${recordCount} Coach${recordCount !== 1 ? 'es' : ''}\n\n`;
-  } else if (lowerQuery.includes('payment') || lowerQuery.includes('revenue')) {
-    response += `💰 Found ${recordCount} Payment${recordCount !== 1 ? 's' : ''}\n\n`;
+    if (lowerQuery.includes('coach')) {
+      response += `💪 **${recordCount} Coaches**\n\n`;
+    } else {
+      response += `👥 **${recordCount} Users**\n\n`;
+    }
+  } else if (lowerQuery.includes('payment')) {
+    response += `💰 **${recordCount} Payments**\n\n`;
   } else if (lowerQuery.includes('relationship')) {
-    response += `🤝 Found ${recordCount} Relationship${recordCount !== 1 ? 's' : ''}\n\n`;
+    response += `🤝 **${recordCount} Relationships**\n\n`;
   } else {
-    response += `📊 Found ${recordCount} Record${recordCount !== 1 ? 's' : ''}\n\n`;
+    response += `📊 **${recordCount} Records**\n\n`;
   }
 
-  // Format the data
-  const displayData = data.slice(0, showLimit);
-  
-  displayData.forEach((record, index) => {
+  // Display all records (no truncation)
+  data.forEach((record, index) => {
     response += `${index + 1}. ${formatRecord(record)}\n`;
   });
-
-  // Add truncation notice
-  if (recordCount > showLimit) {
-    response += `\n... and ${recordCount - showLimit} more record${recordCount - showLimit !== 1 ? 's' : ''}.`;
-  }
-
-  // Add summary insights
-  response += getDataInsights(data, lowerQuery);
 
   return response;
 }
 
 function formatRecord(record: any): string {
-  // Lead formatting
-  if (record.name && record.email && record.status && record.phone_number) {
-    let formatted = `${record.name} (${record.email})`;
-    if (record.phone_number) formatted += ` - ${record.phone_number}`;
-    if (record.status) formatted += ` | Status: ${record.status}`;
-    if (record.counselor) formatted += ` | Counselor: ${record.counselor}`;
+  // Enhanced lead formatting
+  if (record.name && (record.email || record.phone_number)) {
+    let formatted = `**${record.name}**`;
+    if (record.email) formatted += ` (${record.email})`;
+    if (record.phone_number) formatted += ` 📱${record.phone_number}`;
+    if (record.status) formatted += ` | Status: **${record.status}**`;
     if (record.priority) formatted += ` | Priority: ${record.priority}`;
-    if (record.lead_score) formatted += ` | Score: ${record.lead_score}`;
-    if (record.city) formatted += ` | City: ${record.city}`;
+    if (record.lead_score !== undefined) formatted += ` | Score: ${record.lead_score}`;
+    if (record.city) formatted += ` | Location: ${record.city}`;
+    if (record.profession) formatted += ` | Profession: ${record.profession}`;
+    if (record.follow_up_date) formatted += ` | Follow-up: ${new Date(record.follow_up_date).toLocaleDateString()}`;
     return formatted;
   }
   
-  // User formatting
+  // Enhanced user formatting
   if (record.first_name || record.last_name || record.email) {
-    let formatted = `${record.first_name || ''} ${record.last_name || ''}`.trim();
-    if (!formatted && record.email) formatted = record.email;
-    if (record.email && formatted !== record.email) formatted += ` (${record.email})`;
+    let name = `${record.first_name || ''} ${record.last_name || ''}`.trim();
+    if (!name && record.email) name = record.email;
+    
+    let formatted = `**${name}**`;
+    if (record.email && name !== record.email) formatted += ` (${record.email})`;
+    if (record.phone) formatted += ` 📱${record.phone}`;
     if (record.specialty) formatted += ` | Specialty: ${record.specialty}`;
     if (record.primary_goal) formatted += ` | Goal: ${record.primary_goal}`;
     if (record.current_weight && record.target_weight) {
-      formatted += ` | Weight: ${record.current_weight} → ${record.target_weight}`;
+      formatted += ` | Weight: ${record.current_weight}kg → ${record.target_weight}kg`;
     }
-    if (record.is_active !== undefined) formatted += ` | ${record.is_active ? 'Active' : 'Inactive'}`;
+    if (record.fitness_level) formatted += ` | Level: ${record.fitness_level}`;
+    if (record.is_active !== undefined) formatted += ` | ${record.is_active ? '✅ Active' : '❌ Inactive'}`;
     return formatted;
   }
   
-  // Payment formatting with user names
-  if (record.amount && record.payment_date) {
-    let formatted = `₹${parseFloat(record.amount).toFixed(2)} - ${new Date(record.payment_date).toLocaleDateString()}`;
+  // Enhanced payment formatting
+  if (record.amount !== undefined) {
+    let formatted = `💰 **₹${parseFloat(record.amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**`;
     
-    // Use joined user data or enhanced user data
+    if (record.payment_date) {
+      formatted += ` on ${new Date(record.payment_date).toLocaleDateString()}`;
+    }
+    
+    // Check for joined user data
     if (record.users && (record.users.first_name || record.users.last_name)) {
       formatted += ` | Client: ${record.users.first_name || ''} ${record.users.last_name || ''}`.trim();
     } else if (record.user && (record.user.first_name || record.user.last_name)) {
@@ -608,12 +561,12 @@ function formatRecord(record: any): string {
     return formatted;
   }
   
-  // Relationship formatting with names
+  // Relationship formatting
   if (record.client_id && record.coach_id) {
     let formatted = '';
     
     if (record.client && (record.client.first_name || record.client.last_name)) {
-      formatted += `Client: ${record.client.first_name || ''} ${record.client.last_name || ''}`.trim();
+      formatted += `**Client:** ${record.client.first_name || ''} ${record.client.last_name || ''}`.trim();
     } else {
       formatted += `Client ID: ${record.client_id.substring(0, 8)}...`;
     }
@@ -621,137 +574,204 @@ function formatRecord(record: any): string {
     formatted += ' → ';
     
     if (record.coach && (record.coach.first_name || record.coach.last_name)) {
-      formatted += `Coach: ${record.coach.first_name || ''} ${record.coach.last_name || ''}`.trim();
+      formatted += `**Coach:** ${record.coach.first_name || ''} ${record.coach.last_name || ''}`.trim();
       if (record.coach.specialty) formatted += ` (${record.coach.specialty})`;
     } else {
       formatted += `Coach ID: ${record.coach_id.substring(0, 8)}...`;
     }
     
     if (record.status) formatted += ` | Status: ${record.status}`;
-    if (record.start_date) formatted += ` | Since: ${new Date(record.start_date).toLocaleDateString()}`;
+    if (record.start_date) formatted += ` | Started: ${new Date(record.start_date).toLocaleDateString()}`;
+    if (record.end_date) formatted += ` | Ended: ${new Date(record.end_date).toLocaleDateString()}`;
     return formatted;
   }
   
-  // Role formatting
-  if (record.name && record.description) {
-    return `${record.name} - ${record.description}`;
-  }
-  
-  // Generic formatting
+  // Generic formatting with more fields
   const keys = Object.keys(record).filter(key => 
-    !key.includes('id') && 
     !key.includes('created_at') && 
     !key.includes('updated_at') &&
     typeof record[key] !== 'object'
   );
-  const values = keys.slice(0, 3).map(key => {
+  
+  const values = keys.slice(0, 5).map(key => {
     const value = record[key];
+    if (value === null || value === undefined) return '';
+    
+    let formattedValue = value;
     if (typeof value === 'string' && value.length > 30) {
-      return `${key}: ${value.substring(0, 27)}...`;
+      formattedValue = `${value.substring(0, 27)}...`;
+    } else if (typeof value === 'boolean') {
+      formattedValue = value ? '✅ Yes' : '❌ No';
+    } else if (key.toLowerCase().includes('date')) {
+      formattedValue = new Date(value).toLocaleDateString();
+    } else if (key.toLowerCase().includes('amount')) {
+      formattedValue = `₹${parseFloat(value).toLocaleString('en-IN')}`;
     }
-    return `${key}: ${value}`;
-  });
+    
+    return `**${key}:** ${formattedValue}`;
+  }).filter(v => v);
+  
   return values.join(' | ');
 }
 
 function formatSingleRecord(record: any): string {
-  return formatRecord(record);
+  let response = '';
+  
+  Object.keys(record).forEach(key => {
+    if (typeof record[key] === 'object') return;
+    
+    const value = record[key];
+    let displayValue = value;
+    
+    if (value === null || value === undefined) {
+      displayValue = 'N/A';
+    } else if (typeof value === 'boolean') {
+      displayValue = value ? '✅ Yes' : '❌ No';
+    } else if (key.toLowerCase().includes('date')) {
+      displayValue = new Date(value).toLocaleString();
+    } else if (key.toLowerCase().includes('amount')) {
+      displayValue = `₹${parseFloat(value).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+    }
+    
+    response += `**${key.replace(/_/g, ' ').toUpperCase()}:** ${displayValue}\n`;
+  });
+  
+  return response;
 }
 
-function getDataInsights(data: any[], query: string): string {
-  if (data.length === 0) return '';
+function getEnhancedInsights(data: any[], query: string): string {
+  let insights = '\n\n## 📈 **Insights & Analytics**\n\n';
   
-  let insights = '\n\n💡 Quick Insights:\n';
-  
-  if (query.includes('lead')) {
+  if (query.toLowerCase().includes('lead')) {
     // Lead status distribution
-    const statusCounts = data.reduce((acc, lead) => {
-      if (lead.status) acc[lead.status] = (acc[lead.status] || 0) + 1;
+    const statusCounts = data.reduce((acc: any, lead: any) => {
+      if (lead.status) {
+        acc[lead.status] = (acc[lead.status] || 0) + 1;
+      }
       return acc;
     }, {});
     
-    const topStatus = Object.entries(statusCounts).sort(([,a], [,b]) => (b as number) - (a as number))[0];
-    if (topStatus) {
-      insights += `• Most leads are in "${topStatus[0]}" status (${topStatus[1]} leads)\n`;
+    if (Object.keys(statusCounts).length > 0) {
+      insights += '**Lead Status Distribution:**\n';
+      Object.entries(statusCounts).forEach(([status, count]: [string, any]) => {
+        const percentage = ((count / data.length) * 100).toFixed(1);
+        insights += `• ${status}: ${count} (${percentage}%)\n`;
+      });
     }
     
     // Average lead score
-    const scoresData = data.filter(l => l.lead_score);
+    const scoresData = data.filter((l: any) => l.lead_score !== undefined && l.lead_score !== null);
     if (scoresData.length > 0) {
-      const avgScore = scoresData.reduce((sum, l) => sum + l.lead_score, 0) / scoresData.length;
-      insights += `• Average lead score: ${avgScore.toFixed(1)}/100\n`;
+      const avgScore = scoresData.reduce((sum: number, l: any) => sum + l.lead_score, 0) / scoresData.length;
+      insights += `\n**Lead Quality:** Average score: ${avgScore.toFixed(1)}/100\n`;
     }
     
-    // Priority distribution
-    const highPriority = data.filter(l => l.priority === 'High').length;
-    if (highPriority > 0) {
-      insights += `• ${highPriority} high-priority lead${highPriority !== 1 ? 's' : ''} need immediate attention\n`;
-    }
+    // Priority analysis
+    const highPriority = data.filter((l: any) => l.priority === 'High').length;
+    const mediumPriority = data.filter((l: any) => l.priority === 'Medium').length;
+    const lowPriority = data.filter((l: any) => l.priority === 'Low').length;
+    
+    insights += `\n**Priority Breakdown:**\n`;
+    insights += `• High: ${highPriority} leads\n`;
+    insights += `• Medium: ${mediumPriority} leads\n`;
+    insights += `• Low: ${lowPriority} leads\n`;
   }
   
-  if (query.includes('payment') && data.some(p => p.amount)) {
-    const totalRevenue = data.reduce((sum, payment) => sum + parseFloat(payment.amount || 0), 0);
-    insights += `• Total revenue: ₹${totalRevenue.toFixed(2)}\n`;
-    
+  if (query.toLowerCase().includes('payment') && data.some((p: any) => p.amount)) {
+    const totalRevenue = data.reduce((sum: number, payment: any) => sum + parseFloat(payment.amount || 0), 0);
     const avgPayment = totalRevenue / data.length;
-    insights += `• Average payment: ₹${avgPayment.toFixed(2)}\n`;
     
-    // Count with names vs without names
-    const paymentsWithNames = data.filter(p => (p.users && p.users.first_name) || (p.user && p.user.first_name)).length;
-    if (paymentsWithNames > 0) {
-      insights += `• ${paymentsWithNames} payment${paymentsWithNames !== 1 ? 's' : ''} linked to client profiles\n`;
+    insights += '\n**Financial Summary:**\n';
+    insights += `• Total Revenue: **₹${totalRevenue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}**\n`;
+    insights += `• Average Payment: **₹${avgPayment.toLocaleString('en-IN', { minimumFractionDigits: 2 })}**\n`;
+    insights += `• Number of Transactions: **${data.length}**\n`;
+    
+    // Payment status breakdown
+    const statusCounts = data.reduce((acc: any, payment: any) => {
+      if (payment.status) {
+        acc[payment.status] = (acc[payment.status] || 0) + 1;
+      }
+      return acc;
+    }, {});
+    
+    if (Object.keys(statusCounts).length > 0) {
+      insights += '\n**Payment Status:**\n';
+      Object.entries(statusCounts).forEach(([status, count]: [string, any]) => {
+        insights += `• ${status}: ${count} payments\n`;
+      });
     }
   }
   
-  if (query.includes('user')) {
+  if (query.toLowerCase().includes('user')) {
     // Active vs inactive
-    const activeUsers = data.filter(u => u.is_active).length;
-    if (activeUsers !== data.length) {
-      insights += `• ${activeUsers} active out of ${data.length} total users\n`;
-    }
+    const activeUsers = data.filter((u: any) => u.is_active).length;
+    const inactiveUsers = data.length - activeUsers;
     
-    // Users with specialties (coaches)
-    const coaches = data.filter(u => u.specialty).length;
+    insights += '\n**User Activity:**\n';
+    insights += `• Active Users: ${activeUsers}\n`;
+    insights += `• Inactive Users: ${inactiveUsers}\n`;
+    
+    // Coaches vs clients
+    const coaches = data.filter((u: any) => u.specialty).length;
+    const clients = data.length - coaches;
+    
     if (coaches > 0) {
-      insights += `• ${coaches} user${coaches !== 1 ? 's' : ''} with coaching specialties\n`;
+      insights += '\n**User Roles:**\n';
+      insights += `• Coaches: ${coaches}\n`;
+      insights += `• Clients: ${clients}\n`;
     }
   }
   
-  if (query.includes('relationship')) {
-    const activeRels = data.filter(r => r.status === 'active').length;
-    if (activeRels > 0) {
-      insights += `• ${activeRels} active coaching relationship${activeRels !== 1 ? 's' : ''}\n`;
-    }
+  if (query.toLowerCase().includes('relationship')) {
+    const activeRels = data.filter((r: any) => r.status === 'active').length;
+    const inactiveRels = data.length - activeRels;
     
-    const relsWithNames = data.filter(r => r.client && r.coach).length;
-    if (relsWithNames > 0) {
-      insights += `• ${relsWithNames} relationship${relsWithNames !== 1 ? 's' : ''} with full client and coach details\n`;
-    }
+    insights += '\n**Relationship Status:**\n';
+    insights += `• Active: ${activeRels}\n`;
+    insights += `• Inactive: ${inactiveRels}\n`;
   }
   
   return insights;
 }
 
-function getLeadInsight(count: number): string {
-  if (count === 0) return "Time to focus on lead generation!";
-  if (count < 10) return "Consider boosting your marketing efforts.";
-  if (count < 50) return "Good lead flow, keep it up!";
-  return "Great lead generation! Make sure to follow up promptly.";
-}
-
-function getClientInsight(count: number): string {
-  if (count === 0) return "Focus on converting leads to clients.";
-  if (count < 20) return "Growing client base!";
-  if (count < 100) return "Solid client foundation.";
-  return "Impressive client portfolio!";
-}
-
-// Health check endpoint
+// Enhanced health check endpoint
 export async function GET() {
-  return NextResponse.json({ 
-    status: 'healthy', 
-    message: 'CRM AI Assistant API is running with name resolution',
-    timestamp: new Date().toISOString(),
-    version: '6.0.0'
-  });
+  try {
+    // Test database connection
+    const { data: userCount, error: userError } = await supabase
+      .from('users')
+      .select('*', { count: 'exact', head: true });
+    
+    const { data: leadCount, error: leadError } = await supabase
+      .from('leads')
+      .select('*', { count: 'exact', head: true });
+    
+    const isDbHealthy = !userError && !leadError;
+    
+    return NextResponse.json({ 
+      status: 'healthy',
+      message: 'Enhanced CRM AI Assistant API is fully operational',
+      timestamp: new Date().toISOString(),
+      version: '7.0.0',
+      features: [
+        'Full query support (SELECT, INSERT, UPDATE, DELETE)',
+        'No artificial limits on results',
+        'Comprehensive data formatting',
+        'Enhanced insights and analytics',
+        'Advanced error handling'
+      ],
+      database: {
+        connected: isDbHealthy,
+        userCount: userCount || 'N/A',
+        leadCount: leadCount || 'N/A'
+      }
+    });
+  } catch (error) {
+    return NextResponse.json({
+      status: 'degraded',
+      message: 'API is running but database connection failed',
+      timestamp: new Date().toISOString(),
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    }, { status: 500 });
+  }
 }

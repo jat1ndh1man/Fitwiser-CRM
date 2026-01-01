@@ -34,6 +34,13 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Users,
+  RefreshCw,
+  Snowflake,
+  Heart,
+  Star,
+  FileQuestion,
+  Coffee,
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
@@ -41,7 +48,7 @@ import type { DateRange } from "react-day-picker"
 // Initialize Supabase client
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
 
-// Role constants - matching the reference pattern
+// Role constants
 const EXECUTIVE_ROLE = "1fe1759c-dc14-4933-947a-c240c046bcde"
 const SALES_MANAGER_ROLE = "11b93954-9a56-4ea5-a02c-15b731ee9dfb"
 const ADMIN_ROLE = "46e786df-0272-4f22-aec2-56d2a517fa9d"
@@ -51,89 +58,137 @@ const SUPERADMIN_ROLE = "b00060fe-175a-459b-8f72-957055ee8c55"
 interface BalanceReport {
   id: string
   clientName: string
-  email: string
+  contact: string
   package: string
   totalAmount: number
   amountPaid: number
   balance: number
   dueDate: string
-  status: string
-  lastPayment: string
-  paymentMethod: string
-}
-
-interface ActivationReport {
-  id: string
-  clientName: string
-  package: string
-  joiningDate: string
-  activationDate: string
-  activationDelay: number
-  status: string
+  dueDays: number
   counselor: string
-  activatedBy: string
-  notes: string | null
+  coach: string
+  email: string
 }
 
 interface SalesReport {
   id: string
   date: string
   clientName: string
+  contact: string
   package: string
   amount: number
+  upsellRenewal: string
   counselor: string
-  status: string
+  balance: number
+  city: string
   source: string
 }
 
-interface ConversionReport {
+interface ActivationReport {
   id: string
-  leadName: string
-  leadDate: string
-  conversionDate: string | null
-  daysTaken: number | null
-  source: string
+  clientName: string
+  contact: string
+  package: string
+  joiningDate: string
+  activationDate: string
+  expiryDate: string
+  leftDays: number
   counselor: string
-  package: string | null
-  amount: number | null
-  status: string
-  touchpoints: number
-  email: string
-  phone: string
-  paymentCount: number
-  totalPaid: number
-  lastPayment: string | null
+  coach: string
 }
 
 interface ExpiryReport {
   id: string
   clientName: string
+  contact: string
   package: string
+  joiningDate: string
   activationDate: string
   expiryDate: string
-  daysRemaining: number
-  status: string
+  leftDays: number
+  counselor: string
+  coach: string
   renewalStatus: string
-  lastRenewalContact: string | null
-  autoRenewal: boolean
   email: string
 }
 
-// Static data for reports not yet implemented
-const followUpReports = [
-  {
-    id: 1,
-    leadName: "Alex Brown",
-    counselor: "Sarah Johnson",
-    lastContact: "2024-01-10",
-    nextFollowUp: "2024-01-17",
-    priority: "High",
-    status: "Scheduled",
-    contactMethod: "Phone Call",
-    notes: "Interested in premium package",
-    attempts: 3,
-  },
-]
+interface FreezingReport {
+  id: string
+  clientName: string
+  contact: string
+  package: string
+  activationDate: string
+  frozenDays: number
+  updatedExpiryDate: string
+  counselor: string
+  coach: string
+  reason: string
+}
+
+interface FollowUpReport {
+  id: string
+  name: string
+  contact: string
+  counselor: string
+  lastContact: string
+  source: string
+  leadDate: string
+  status: string
+  followUpDate: string
+  attempts: number
+}
+
+interface AppointmentReport {
+  id: string
+  name: string
+  contact: string
+  counselor: string
+  bde: string
+  source: string
+  leadDate: string
+  followUpDate: string
+  attempts: number
+  appointmentStatus: string
+}
+
+interface ReferralReport {
+  id: string
+  name: string
+  contact: string
+  referredBy: string
+  referrerContact: string
+  counselor: string
+  leadDate: string
+  leadStatus: string
+  followUpDate: string
+}
+
+interface RenewalReport {
+  id: string
+  clientName: string
+  contact: string
+  package: string
+  joiningDate: string
+  activationDate: string
+  expiryDate: string
+  leftDays: number
+  counselor: string
+  coach: string
+  renewalMonth: string
+}
+
+// Add reference tracking table schema (we'll create this dynamically)
+const REFERENCES_TABLE = `
+CREATE TABLE IF NOT EXISTS user_references (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  referrer_id uuid REFERENCES users(id),
+  referred_user_id uuid REFERENCES users(id),
+  referral_date timestamp DEFAULT now(),
+  status varchar(20) DEFAULT 'pending',
+  converted_at timestamp,
+  created_at timestamp DEFAULT now()
+);
+`
 
 type SortField = string
 type SortDirection = "asc" | "desc" | null
@@ -153,7 +208,7 @@ export function ReportsTab() {
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(10)
 
-  // Role-based access control - matching reference pattern
+  // Role-based access control
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null)
   const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [assignedLeadIds, setAssignedLeadIds] = useState<string[]>([])
@@ -161,19 +216,22 @@ export function ReportsTab() {
 
   // Dynamic data states
   const [balanceReports, setBalanceReports] = useState<BalanceReport[]>([])
-  const [conversionReports, setConversionReports] = useState<ConversionReport[]>([])
-  const [expiryReports, setExpiryReports] = useState<ExpiryReport[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [salesReports, setSalesReports] = useState<SalesReport[]>([])
   const [activationReports, setActivationReports] = useState<ActivationReport[]>([])
+  const [expiryReports, setExpiryReports] = useState<ExpiryReport[]>([])
+  const [renewalReports, setRenewalReports] = useState<RenewalReport[]>([])
+  const [freezingReports, setFreezingReports] = useState<FreezingReport[]>([])
+  const [followUpReports, setFollowUpReports] = useState<FollowUpReport[]>([])
+  const [appointmentReports, setAppointmentReports] = useState<AppointmentReport[]>([])
+  const [referralReports, setReferralReports] = useState<ReferralReport[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [debugInfo, setDebugInfo] = useState<string>("")
 
-  // Initialize user role and assignments - matching reference pattern
+  // Initialize user role and assignments
   useEffect(() => {
     const initializeUserAccess = async () => {
       try {
-        // Get user profile from localStorage
         const userProfile = localStorage.getItem("userProfile")
         if (!userProfile) {
           setUserAccessInitialized(true)
@@ -184,7 +242,6 @@ export function ReportsTab() {
         setCurrentUserId(userId)
         setCurrentUserRole(roleId)
 
-        // If user is executive, fetch their assigned lead IDs
         if (roleId === EXECUTIVE_ROLE) {
           const { data: assignments, error } = await supabase
             .from("lead_assignments")
@@ -197,7 +254,6 @@ export function ReportsTab() {
           } else {
             const leadIds = assignments?.map((a) => a.lead_id) || []
             setAssignedLeadIds(leadIds)
-            console.log("Executive assigned lead IDs:", leadIds)
           }
         }
 
@@ -225,7 +281,30 @@ export function ReportsTab() {
     return assignedLeadIds // return assigned leads for executives
   }
 
-  // Fetch balance reports with role-based filtering - FIXED TO SHOW ALL ASSIGNED LEADS
+  // Helper function to get coach name for a client
+  const getClientCoach = async (userId: string) => {
+    const { data } = await supabase
+      .from("client_coach_relationships")
+      .select("coach_id")
+      .eq("client_id", userId)
+      .eq("status", "active")
+      .single()
+
+    if (data) {
+      const { data: coach } = await supabase
+        .from("users")
+        .select("first_name, last_name")
+        .eq("id", data.coach_id)
+        .single()
+
+      if (coach) {
+        return `${coach.first_name} ${coach.last_name}`
+      }
+    }
+    return "Not Assigned"
+  }
+
+  // Fetch balance reports
   const fetchBalanceReports = async () => {
     try {
       setLoading(true)
@@ -233,7 +312,7 @@ export function ReportsTab() {
 
       const filteredLeadIds = getFilteredLeadIds()
 
-      // First, get all leads that should be included
+      // Get all leads
       let leadsQuery = supabase.from("leads").select("*")
       if (filteredLeadIds !== null) {
         if (filteredLeadIds.length === 0) {
@@ -246,11 +325,11 @@ export function ReportsTab() {
       const { data: leads, error: leadsError } = await leadsQuery
       if (leadsError) throw leadsError
 
-      // Get all users for name mapping
-      const { data: users, error: usersError } = await supabase.from("users").select("id, email, first_name, last_name")
+      // Get all users for mapping
+      const { data: users, error: usersError } = await supabase.from("users").select("id, email, phone, first_name, last_name")
       if (usersError) throw usersError
 
-      // Get payment data for these leads
+      // Get payment data
       let paymentLinksQuery = supabase.from("payment_links").select("*")
       let manualPaymentsQuery = supabase.from("manual_payment").select("*")
 
@@ -265,89 +344,59 @@ export function ReportsTab() {
       if (paymentLinksError) throw paymentLinksError
       if (manualPaymentsError) throw manualPaymentsError
 
-      // Create a map of payments by lead_id
-      const paymentsByLead = new Map()
+      // Process balance reports
+      const balanceReports: BalanceReport[] = []
 
-      // Process payment links
-      ;(paymentLinks || []).forEach((payment: any) => {
-        if (!payment.lead_id) return
-        if (!paymentsByLead.has(payment.lead_id)) {
-          paymentsByLead.set(payment.lead_id, [])
-        }
-        paymentsByLead.get(payment.lead_id).push({
-          ...payment,
-          type: "payment_link",
-        })
-      })
-
-      // Process manual payments
-      ;(manualPayments || []).forEach((payment: any) => {
-        if (!payment.lead_id) return
-        if (!paymentsByLead.has(payment.lead_id)) {
-          paymentsByLead.set(payment.lead_id, [])
-        }
-        paymentsByLead.get(payment.lead_id).push({
-          ...payment,
-          type: "manual_payment",
-        })
-      })
-
-      // Create balance reports for ALL leads (including those with no payments)
-      const balanceReports: BalanceReport[] = (leads || []).map((lead: any) => {
-        const leadPayments = paymentsByLead.get(lead.id) || []
-
-        // Find user by email or phone
+      for (const lead of leads || []) {
         const user = users?.find((u) => u.email === lead.email || u.phone === lead.phone_number)
-        const firstName = user?.first_name || ""
-        const lastName = user?.last_name || ""
-        const clientName = `${firstName} ${lastName}`.trim() || lead.name || "Unknown User"
+        const clientName = user ? `${user.first_name} ${user.last_name}`.trim() : lead.name || "Unknown"
+        
+        // Get coach information
+        const coach = user ? await getClientCoach(user.id) : "Not Assigned"
 
-        if (leadPayments.length === 0) {
-          // Lead with no payments - show as pending
-          return {
-            id: `lead_${lead.id}`,
-            clientName,
-            email: lead.email || "",
-            package: "No Package",
-            totalAmount: 0,
-            amountPaid: 0,
-            balance: 0,
-            dueDate: lead.created_at,
-            status: "No Payment",
-            lastPayment: "Never",
-            paymentMethod: "N/A",
-          }
-        }
+        // Get payments for this lead
+        const leadPayments = [
+          ...(paymentLinks || []).filter((p) => p.lead_id === lead.id),
+          ...(manualPayments || []).filter((p) => p.lead_id === lead.id),
+        ]
 
-        // Lead with payments - calculate totals
-        const totalAmount = leadPayments.reduce((sum: number, p: any) => sum + (p.amount || 0), 0)
+        const totalAmount = leadPayments.reduce((sum, p) => sum + (p.amount || 0), 0)
         const amountPaid = leadPayments
-          .filter((p: any) => p.status === "completed")
-          .reduce((sum: number, p: any) => sum + (p.amount || 0), 0)
+          .filter((p) => p.status === "completed")
+          .reduce((sum, p) => sum + (p.amount || 0), 0)
         const balance = totalAmount - amountPaid
 
+        // Calculate due days
         const latestPayment = leadPayments.sort(
-          (a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
         )[0]
+        
+        const dueDate = latestPayment?.due_date || latestPayment?.expires_at || null
+        let dueDays = 0
+        if (dueDate) {
+          const today = new Date()
+          const due = new Date(dueDate)
+          dueDays = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+        }
 
-        return {
-          id: `lead_${lead.id}`,
+        balanceReports.push({
+          id: lead.id,
           clientName,
-          email: lead.email || "",
-          package: latestPayment?.plan || latestPayment?.description || "Standard",
+          contact: lead.phone_number || user?.phone || "N/A",
+          package: latestPayment?.plan || latestPayment?.package_name || "No Package",
           totalAmount,
           amountPaid,
           balance,
-          dueDate: latestPayment?.expires_at || latestPayment?.plan_expiry || latestPayment?.created_at,
-          status: balance > 0 ? "Pending" : amountPaid > 0 ? "Paid" : "No Payment",
-          lastPayment: latestPayment?.payment_date || latestPayment?.updated_at || "Never",
-          paymentMethod: latestPayment?.payment_method || "N/A",
-        }
-      })
+          dueDate: dueDate || "Not Set",
+          dueDays,
+          counselor: lead.counselor || "Unassigned",
+          coach,
+          email: lead.email || user?.email || "",
+        })
+      }
 
-      console.log("Balance reports generated:", balanceReports.length)
       setBalanceReports(balanceReports)
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error fetching balance reports:", err)
       setError("Failed to fetch balance reports")
     } finally {
@@ -355,438 +404,7 @@ export function ReportsTab() {
     }
   }
 
-  const fetchConversionReports = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-
-      const filteredLeadIds = getFilteredLeadIds()
-
-      let leadsQuery = supabase.from("leads").select("*")
-      if (filteredLeadIds !== null) {
-        if (filteredLeadIds.length === 0) {
-          setConversionReports([])
-          return
-        }
-        leadsQuery = leadsQuery.in("id", filteredLeadIds)
-      }
-
-      const { data: leads, error: leadsErr } = await leadsQuery
-      if (leadsErr) throw leadsErr
-
-      const { data: users, error: usersErr } = await supabase
-        .from("users")
-        .select("id,email,phone,first_name,last_name,created_at")
-      if (usersErr) throw usersErr
-
-      // Load payments
-      let linkPaymentsQuery = supabase.from("payment_links").select("lead_id, user_id, amount,payment_date")
-      let manualPaymentsQuery = supabase.from("manual_payment").select("lead_id, user_id, amount, payment_date")
-
-      if (filteredLeadIds !== null && filteredLeadIds.length > 0) {
-        linkPaymentsQuery = linkPaymentsQuery.in("lead_id", filteredLeadIds)
-        manualPaymentsQuery = manualPaymentsQuery.in("lead_id", filteredLeadIds)
-      }
-
-      const { data: linkPayments, error: lpErr } = await linkPaymentsQuery
-      const { data: manualPayments, error: mpErr } = await manualPaymentsQuery
-
-      if (lpErr) throw lpErr
-      if (mpErr) throw mpErr
-
-      // Group payments by lead_id
-      const paymentsByLead = [...(linkPayments || []), ...(manualPayments || [])].reduce<
-        Record<string, { amount: number; payment_date: string }[]>
-      >((acc, p) => {
-        if (!p.lead_id) return acc
-        acc[p.lead_id] = acc[p.lead_id] || []
-        acc[p.lead_id].push({ amount: p.amount, payment_date: p.payment_date })
-        return acc
-      }, {})
-
-      const paymentsByUser = [...(linkPayments || []), ...(manualPayments || [])].reduce<
-        Record<string, { amount: number; payment_date: string }[]>
-      >((acc, p) => {
-        if (!p.user_id) return acc
-        acc[p.user_id] = acc[p.user_id] || []
-        acc[p.user_id].push({ amount: p.amount, payment_date: p.payment_date })
-        return acc
-      }, {})
-
-      // Map leads to ConversionReport
-      const conversionData: ConversionReport[] = (leads || []).map((lead: any) => {
-        const matched = users.find((u) => u.email === lead.email || u.phone === lead.phone_number)
-        const isConverted = !!matched
-
-        // Payment history - combine payments from both lead_id and user_id
-        const leadPayments = paymentsByLead[lead.id] || []
-        const userPayments = matched ? paymentsByUser[matched.id] || [] : []
-
-        // Combine and deduplicate payments
-        const allPayments = [...leadPayments, ...userPayments]
-        const uniquePayments = allPayments.filter(
-          (payment, index, self) =>
-            index === self.findIndex((p) => p.payment_date === payment.payment_date && p.amount === payment.amount),
-        )
-
-        const paymentCount = uniquePayments.length
-        const totalPaid = uniquePayments.reduce((sum, p) => sum + p.amount, 0)
-        const lastPaymentIso =
-          uniquePayments.map((p) => p.payment_date).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ||
-          null
-
-        return {
-          id: lead.id,
-          leadName: lead.name || "–",
-          leadDate: lead.created_at,
-          conversionDate: matched?.created_at || null,
-          daysTaken: matched
-            ? Math.ceil(
-                (new Date(matched.created_at).getTime() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24),
-              )
-            : null,
-          source: lead.source || "Unknown",
-          counselor: lead.counselor || "Unassigned",
-          package: matched ? "Standard" : null,
-          amount: null,
-          status: isConverted ? "Converted" : "Lost",
-          touchpoints: 1,
-          email: lead.email,
-          phone: lead.phone_number,
-          paymentCount,
-          totalPaid,
-          lastPayment: lastPaymentIso,
-        }
-      })
-
-      console.log("Conversion reports generated:", conversionData.length)
-      setConversionReports(conversionData)
-    } catch (err) {
-      console.error(err)
-      setError("Failed to fetch conversion reports")
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // FIXED Fetch membership expiry data with better error handling and fallback logic
-  const fetchExpiryReports = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      setDebugInfo("")
-
-      const filteredLeadIds = getFilteredLeadIds()
-      console.log("🔍 Fetching expiry reports for leads:", filteredLeadIds ? filteredLeadIds.length : "all")
-
-      // First get all leads
-      let leadsQuery = supabase.from("leads").select("*")
-      if (filteredLeadIds !== null) {
-        if (filteredLeadIds.length === 0) {
-          setExpiryReports([])
-          setDebugInfo("No assigned leads found for this user.")
-          return
-        }
-        leadsQuery = leadsQuery.in("id", filteredLeadIds)
-      }
-
-      const { data: leads, error: leadsError } = await leadsQuery
-      if (leadsError) throw leadsError
-
-      console.log("📋 Found leads:", leads?.length || 0)
-
-      // Get all users for name mapping
-      const { data: users, error: usersError } = await supabase.from("users").select("id, email, first_name, last_name")
-      if (usersError) throw usersError
-
-      // Get ALL payment data (not just completed) to see what's available
-      let paymentLinksQuery = supabase.from("payment_links").select("*")
-      let manualPaymentsQuery = supabase.from("manual_payment").select("*")
-
-      if (filteredLeadIds !== null && filteredLeadIds.length > 0) {
-        paymentLinksQuery = paymentLinksQuery.in("lead_id", filteredLeadIds)
-        manualPaymentsQuery = manualPaymentsQuery.in("lead_id", filteredLeadIds)
-      }
-
-      const { data: paymentLinks, error: paymentLinksError } = await paymentLinksQuery
-      const { data: manualPayments, error: manualPaymentsError } = await manualPaymentsQuery
-
-      if (paymentLinksError) throw paymentLinksError
-      if (manualPaymentsError) throw manualPaymentsError
-
-      console.log("💳 Payment links found:", paymentLinks?.length || 0)
-      console.log("💰 Manual payments found:", manualPayments?.length || 0)
-
-      const currentDate = new Date()
-
-      // Create a map of payments by lead_id with better fallback logic
-      const paymentsByLead = new Map()
-
-      // Process payment links with more flexible expiry date handling
-      ;(paymentLinks || []).forEach((payment: any) => {
-        if (!payment.lead_id) return
-        
-        // Create expiry date from multiple possible fields
-        let expiryDate = payment.expires_at || payment.plan_expiry || payment.expiry_date
-        
-        // If no expiry date, create one based on payment date + 30 days (example logic)
-        if (!expiryDate && payment.payment_date) {
-          const paymentDate = new Date(payment.payment_date)
-          paymentDate.setDate(paymentDate.getDate() + 30) // Add 30 days as default
-          expiryDate = paymentDate.toISOString()
-        }
-        
-        // If still no expiry date, create one based on created_at + 30 days
-        if (!expiryDate && payment.created_at) {
-          const createdDate = new Date(payment.created_at)
-          createdDate.setDate(createdDate.getDate() + 30)
-          expiryDate = createdDate.toISOString()
-        }
-
-        if (!paymentsByLead.has(payment.lead_id)) {
-          paymentsByLead.set(payment.lead_id, [])
-        }
-        
-        paymentsByLead.get(payment.lead_id).push({
-          ...payment,
-          type: "payment_link",
-          expiry_date: expiryDate,
-          has_original_expiry: !!payment.expires_at
-        })
-      })
-
-      // Process manual payments with more flexible expiry date handling  
-      ;(manualPayments || []).forEach((payment: any) => {
-        if (!payment.lead_id) return
-        
-        // Create expiry date from multiple possible fields
-        let expiryDate = payment.plan_expiry || payment.expires_at || payment.expiry_date
-        
-        // If no expiry date, create one based on payment date + 30 days
-        if (!expiryDate && payment.payment_date) {
-          const paymentDate = new Date(payment.payment_date)
-          paymentDate.setDate(paymentDate.getDate() + 30)
-          expiryDate = paymentDate.toISOString()
-        }
-        
-        // If still no expiry date, create one based on created_at + 30 days
-        if (!expiryDate && payment.created_at) {
-          const createdDate = new Date(payment.created_at)
-          createdDate.setDate(createdDate.getDate() + 30)
-          expiryDate = createdDate.toISOString()
-        }
-
-        if (!paymentsByLead.has(payment.lead_id)) {
-          paymentsByLead.set(payment.lead_id, [])
-        }
-        
-        paymentsByLead.get(payment.lead_id).push({
-          ...payment,
-          type: "manual_payment", 
-          expiry_date: expiryDate,
-          has_original_expiry: !!payment.plan_expiry
-        })
-      })
-
-      console.log("🗂️ Payments mapped by lead:", paymentsByLead.size)
-
-      // Create expiry reports for ALL leads with payments (including estimated expiry dates)
-      const expiryReports: ExpiryReport[] = []
-      let leadsWithPayments = 0
-      let leadsWithoutPayments = 0
-
-      ;(leads || []).forEach((lead: any) => {
-        const leadPayments = paymentsByLead.get(lead.id) || []
-
-        if (leadPayments.length === 0) {
-          leadsWithoutPayments++
-          // Still show leads without payments for expiry tracking
-          const user = users?.find((u) => u.email === lead.email || u.phone === lead.phone_number)
-          const firstName = user?.first_name || ""
-          const lastName = user?.last_name || ""
-          const clientName = `${firstName} ${lastName}`.trim() || lead.name || "Unknown User"
-
-          expiryReports.push({
-            id: `lead_no_payment_${lead.id}`,
-            clientName,
-            package: "No Active Package",
-            activationDate: lead.created_at,
-            expiryDate: "No Expiry Set",
-            daysRemaining: 0,
-            status: "No Active Membership",
-            renewalStatus: "Contact Required",
-            lastRenewalContact: null,
-            autoRenewal: false,
-            email: lead.email || "",
-          })
-          return
-        }
-
-        leadsWithPayments++
-
-        // Find user by email or phone
-        const user = users?.find((u) => u.email === lead.email || u.phone === lead.phone_number)
-        const firstName = user?.first_name || ""
-        const lastName = user?.last_name || ""
-        const clientName = `${firstName} ${lastName}`.trim() || lead.name || "Unknown User"
-
-        // Create expiry report for each payment
-        leadPayments.forEach((payment: any, index: number) => {
-          if (!payment.expiry_date) return // Skip if we couldn't determine expiry date
-
-          const expiryDate = new Date(payment.expiry_date)
-          const daysRemaining = Math.ceil((expiryDate.getTime() - currentDate.getTime()) / (1000 * 60 * 60 * 24))
-
-          expiryReports.push({
-            id: `${payment.type}_${payment.id}_${index}`,
-            clientName,
-            package: payment.plan || payment.description || "Standard Package",
-            activationDate: payment.payment_date || payment.created_at,
-            expiryDate: payment.expiry_date,
-            daysRemaining,
-            status: daysRemaining > 0 ? "Active" : "Expired",
-            renewalStatus: daysRemaining <= 30 && daysRemaining > 0 ? "Follow-up Required" : 
-                          daysRemaining <= 0 ? "Urgent - Expired" : "Not Contacted",
-            lastRenewalContact: null,
-            autoRenewal: false,
-            email: lead.email || "",
-          })
-        })
-      })
-
-      const debugMessage = `Found ${leads?.length || 0} leads, ${leadsWithPayments} with payments, ${leadsWithoutPayments} without payments. Generated ${expiryReports.length} expiry records.`
-      console.log("📊", debugMessage)
-      setDebugInfo(debugMessage)
-
-      console.log("Expiry reports generated:", expiryReports.length)
-      setExpiryReports(expiryReports)
-    } catch (err) {
-      console.error("Error fetching expiry reports:", err)
-      setError(`Failed to fetch expiry reports: ${err.message}`)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const fetchActivationReports = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-
-      const filteredLeadIds = getFilteredLeadIds()
-
-      // Get all leads first
-      let leadsQuery = supabase.from("leads").select("*")
-      if (filteredLeadIds !== null) {
-        if (filteredLeadIds.length === 0) {
-          setActivationReports([])
-          return
-        }
-        leadsQuery = leadsQuery.in("id", filteredLeadIds)
-      }
-
-      const { data: leads, error: leadsError } = await leadsQuery
-      if (leadsError) throw leadsError
-
-      // Get all users for name mapping
-      const { data: users, error: usersError } = await supabase.from("users").select("id, email, first_name, last_name")
-      if (usersError) throw usersError
-
-      // Get completed payments
-      let linkPaymentsQuery = supabase.from("payment_links").select("*").eq("status", "completed")
-
-      let manualPaymentsQuery = supabase.from("manual_payment").select("*").eq("status", "completed")
-
-      if (filteredLeadIds !== null && filteredLeadIds.length > 0) {
-        linkPaymentsQuery = linkPaymentsQuery.in("lead_id", filteredLeadIds)
-        manualPaymentsQuery = manualPaymentsQuery.in("lead_id", filteredLeadIds)
-      }
-
-      const { data: linkPayments, error: linkErr } = await linkPaymentsQuery
-      const { data: manualPayments, error: manErr } = await manualPaymentsQuery
-
-      if (linkErr) throw linkErr
-      if (manErr) throw manErr
-
-      // Get assignments
-      let assignmentsQuery = supabase.from("lead_assignments").select("*")
-      if (filteredLeadIds !== null && filteredLeadIds.length > 0) {
-        assignmentsQuery = assignmentsQuery.in("lead_id", filteredLeadIds)
-      }
-
-      const { data: assignments, error: asnErr } = await assignmentsQuery
-      if (asnErr) throw asnErr
-
-      // Create activation reports for ALL leads (including those without payments)
-      const activationReports: ActivationReport[] = []
-      ;(leads || []).forEach((lead: any) => {
-        // Find user by email or phone
-        const user = users?.find((u) => u.email === lead.email || u.phone === lead.phone_number)
-        const firstName = user?.first_name || ""
-        const lastName = user?.last_name || ""
-        const clientName = `${firstName} ${lastName}`.trim() || lead.name || "Unknown User"
-
-        // Find assignment
-        const assignment = assignments?.find((a) => a.lead_id === lead.id)
-        const counselor = assignment ? users?.find((u) => u.id === assignment.assigned_to) : null
-        const activatedBy = assignment ? users?.find((u) => u.id === assignment.assigned_by) : null
-
-        // Find payments for this lead
-        const leadPayments = [
-          ...(linkPayments || []).filter((p) => p.lead_id === lead.id),
-          ...(manualPayments || []).filter((p) => p.lead_id === lead.id),
-        ]
-
-        if (leadPayments.length === 0) {
-          // Lead with no payments - show as pending activation
-          activationReports.push({
-            id: `lead_${lead.id}`,
-            clientName,
-            package: "No Package",
-            joiningDate: lead.created_at,
-            activationDate: "Pending",
-            activationDelay: Math.ceil(
-              (new Date().getTime() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24),
-            ),
-            status: "Pending",
-            counselor: counselor ? `${counselor.first_name} ${counselor.last_name}` : "Unassigned",
-            activatedBy: activatedBy ? `${activatedBy.first_name} ${activatedBy.last_name}` : "Unknown",
-            notes: null,
-          })
-        } else {
-          // Lead with payments - create report for each payment
-          leadPayments.forEach((payment: any, index: number) => {
-            const activationDate = payment.payment_date || payment.created_at
-            const activationDelay = Math.ceil(
-              (new Date(activationDate).getTime() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24),
-            )
-
-            activationReports.push({
-              id: `payment_${payment.id}_${index}`,
-              clientName,
-              package: payment.plan || payment.description || "Standard",
-              joiningDate: lead.created_at,
-              activationDate,
-              activationDelay,
-              status: "Active",
-              counselor: counselor ? `${counselor.first_name} ${counselor.last_name}` : "Unassigned",
-              activatedBy: activatedBy ? `${activatedBy.first_name} ${activatedBy.last_name}` : "Unknown",
-              notes: payment.notes || null,
-            })
-          })
-        }
-      })
-
-      console.log("Activation reports generated:", activationReports.length)
-      setActivationReports(activationReports)
-    } catch (err) {
-      console.error("Error fetching activation reports:", err)
-      setError("Failed to fetch activation reports")
-    } finally {
-      setLoading(false)
-    }
-  }
-
+  // Fetch sales reports
   const fetchSalesReports = async () => {
     try {
       setLoading(true)
@@ -796,7 +414,6 @@ export function ReportsTab() {
 
       // Get completed payments
       let linkPaymentsQuery = supabase.from("payment_links").select("*").eq("status", "completed")
-
       let manualPaymentsQuery = supabase.from("manual_payment").select("*").eq("status", "completed")
 
       if (filteredLeadIds !== null) {
@@ -816,10 +433,9 @@ export function ReportsTab() {
 
       const allPayments = [...(linkPayments || []), ...(manualPayments || [])]
 
-      // Get lead information and assignments
+      // Get lead information
       const leadIds = allPayments.map((p) => p.lead_id).filter(Boolean)
-
-      let leadsQuery = supabase.from("leads").select("id, source, name, email")
+      let leadsQuery = supabase.from("leads").select("*")
       if (leadIds.length > 0) {
         leadsQuery = leadsQuery.in("id", leadIds)
       }
@@ -827,54 +443,44 @@ export function ReportsTab() {
       const { data: leads, error: leadsErr } = await leadsQuery
       if (leadsErr) throw leadsErr
 
-      let assignmentsQuery = supabase.from("lead_assignments").select("lead_id,assigned_to")
-      if (leadIds.length > 0) {
-        assignmentsQuery = assignmentsQuery.in("lead_id", leadIds)
-      }
-
-      const { data: assignments, error: asnErr } = await assignmentsQuery
-      if (asnErr) throw asnErr
-
-      // Load executives' profiles
-      const execIds = Array.from(new Set(assignments?.map((a) => a.assigned_to) || []))
-
-      let execProfilesQuery = supabase.from("users").select(`id, first_name, last_name, email`)
-      if (execIds.length > 0) {
-        execProfilesQuery = execProfilesQuery.in("id", execIds)
-      }
-
-      const { data: execProfiles, error: execErr } = await execProfilesQuery
-      if (execErr) throw execErr
-
-      // Get all users for name mapping
-      const { data: users, error: usersError } = await supabase.from("users").select("id, email, first_name, last_name")
+      // Get users for mapping
+      const { data: users, error: usersError } = await supabase.from("users").select("id, email, phone, first_name, last_name")
       if (usersError) throw usersError
 
-      // Map payments to SalesReport
-      const reports: SalesReport[] = allPayments.map((p) => {
-        const lead = leads?.find((l) => l.id === p.lead_id)
-        const asn = assignments?.find((a) => a.lead_id === p.lead_id)
-        const exec = asn ? execProfiles?.find((u) => u.id === asn.assigned_to) : null
+      // Process sales reports
+      const salesReports: SalesReport[] = []
 
-        // Find user by lead email or payment user_id
-        const user = users?.find((u) => u.id === p.user_id || u.email === lead?.email)
+      for (const payment of allPayments) {
+        const lead = leads?.find((l) => l.id === payment.lead_id)
+        const user = users?.find((u) => u.id === payment.user_id || u.email === lead?.email)
+        
         const clientName = user ? `${user.first_name} ${user.last_name}`.trim() : lead?.name || "Unknown"
+        
+        // Calculate balance (if any pending payments)
+        const leadPayments = allPayments.filter(p => p.lead_id === payment.lead_id)
+        const totalAmount = leadPayments.reduce((sum, p) => sum + (p.amount || 0), 0)
+        const amountPaid = leadPayments
+          .filter((p) => p.status === "completed")
+          .reduce((sum, p) => sum + (p.amount || 0), 0)
+        const balance = totalAmount - amountPaid
 
-        return {
-          id: `${p.id}`,
-          date: p.created_at,
+        salesReports.push({
+          id: payment.id,
+          date: payment.payment_date || payment.created_at,
           clientName,
-          package: p.plan || p.description || "Standard",
-          amount: p.amount,
-          counselor: exec ? `${exec.first_name} ${exec.last_name}` : "Unassigned",
-          status: p.status === "completed" ? "Completed" : p.status,
+          contact: lead?.phone_number || user?.phone || "N/A",
+          package: payment.plan || payment.package_name || "Standard",
+          amount: payment.amount || 0,
+          upsellRenewal: payment.bill_type === "renewal" ? "Renewal" : payment.bill_type === "upsell" ? "Upsell" : "New",
+          counselor: lead?.counselor || "Unassigned",
+          balance,
+          city: lead?.city || "N/A",
           source: lead?.source || "Unknown",
-        }
-      })
+        })
+      }
 
-      console.log("Sales reports generated:", reports.length)
-      setSalesReports(reports)
-    } catch (err) {
+      setSalesReports(salesReports)
+    } catch (err: any) {
       console.error("Error fetching sales reports:", err)
       setError("Failed to fetch sales reports")
     } finally {
@@ -882,19 +488,579 @@ export function ReportsTab() {
     }
   }
 
-  // Fetch data when report type changes or user access is initialized
+  // Fetch activation reports
+// Fix fetchActivationReports function
+const fetchActivationReports = async () => {
+  try {
+    setLoading(true)
+    setError(null)
+
+    const filteredLeadIds = getFilteredLeadIds()
+
+    // Get all leads
+    let leadsQuery = supabase.from("leads").select("*")
+    if (filteredLeadIds !== null) {
+      if (filteredLeadIds.length === 0) {
+        setActivationReports([])
+        return
+      }
+      leadsQuery = leadsQuery.in("id", filteredLeadIds)
+    }
+
+    const { data: leads, error: leadsError } = await leadsQuery
+    if (leadsError) throw leadsError
+
+    // Get all users for mapping
+    const { data: users, error: usersError } = await supabase
+      .from("users")
+      .select("id, email, phone, first_name, last_name, created_at")
+    if (usersError) throw usersError
+
+    // Get completed payments from payment_links
+    let linkPaymentsQuery = supabase.from("payment_links").select("*").eq("status", "completed")
+    if (filteredLeadIds !== null && filteredLeadIds.length > 0) {
+      linkPaymentsQuery = linkPaymentsQuery.in("lead_id", filteredLeadIds)
+    }
+
+    // Get completed payments from manual_payment
+    let manualPaymentsQuery = supabase.from("manual_payment").select("*").eq("status", "completed")
+    if (filteredLeadIds !== null && filteredLeadIds.length > 0) {
+      manualPaymentsQuery = manualPaymentsQuery.in("lead_id", filteredLeadIds)
+    }
+
+    const { data: linkPayments, error: linkErr } = await linkPaymentsQuery
+    const { data: manualPayments, error: manErr } = await manualPaymentsQuery
+
+    if (linkErr) throw linkErr
+    if (manErr) throw manErr
+
+    // Combine payments from both tables
+    const allPayments = [...(linkPayments || []), ...(manualPayments || [])]
+
+    const activationReports: ActivationReport[] = []
+
+    for (const lead of leads || []) {
+      const user = users?.find((u) => u.email === lead.email || u.phone === lead.phone_number)
+      const clientName = user ? `${user.first_name} ${user.last_name}`.trim() : lead.name || "Unknown"
+      
+      // Get coach information
+      const coach = user ? await getClientCoach(user.id) : "Not Assigned"
+
+      // Find first payment for activation
+      const leadPayments = allPayments.filter((p: any) => p.lead_id === lead.id)
+      if (leadPayments.length > 0) {
+        const firstPayment = leadPayments.sort(
+          (a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        )[0]
+
+        const joiningDate = user?.created_at || lead.created_at
+        const activationDate = firstPayment.payment_date || firstPayment.created_at
+        const expiryDate = firstPayment.plan_expiry || "Not Set"
+        
+        // Calculate left days
+        let leftDays = 0
+        if (expiryDate !== "Not Set") {
+          const today = new Date()
+          const expiry = new Date(expiryDate)
+          leftDays = Math.ceil((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+        }
+
+        activationReports.push({
+          id: lead.id,
+          clientName,
+          contact: lead.phone_number || user?.phone || "N/A",
+          package: firstPayment.plan || firstPayment.package_name || "Standard",
+          joiningDate,
+          activationDate,
+          expiryDate,
+          leftDays,
+          counselor: lead.counselor || "Unassigned",
+          coach,
+        })
+      }
+    }
+
+    setActivationReports(activationReports)
+  } catch (err: any) {
+    console.error("Error fetching activation reports:", err)
+    setError("Failed to fetch activation reports")
+  } finally {
+    setLoading(false)
+  }
+}
+
+// Fix fetchExpiryReports function
+const fetchExpiryReports = async () => {
+  try {
+    setLoading(true)
+    setError(null)
+
+    const filteredLeadIds = getFilteredLeadIds()
+
+    // Get all leads
+    let leadsQuery = supabase.from("leads").select("*")
+    if (filteredLeadIds !== null) {
+      if (filteredLeadIds.length === 0) {
+        setExpiryReports([])
+        return
+      }
+      leadsQuery = leadsQuery.in("id", filteredLeadIds)
+    }
+
+    const { data: leads, error: leadsError } = await leadsQuery
+    if (leadsError) throw leadsError
+
+    // Get all users for mapping
+    const { data: users, error: usersError } = await supabase
+      .from("users")
+      .select("id, email, phone, first_name, last_name, created_at")
+    if (usersError) throw usersError
+
+    // Get payments with expiry dates from payment_links
+    let linkPaymentsQuery = supabase
+      .from("payment_links")
+      .select("*")
+      .not("plan_expiry", "is", null)
+      .eq("status", "completed")
+    
+    if (filteredLeadIds !== null && filteredLeadIds.length > 0) {
+      linkPaymentsQuery = linkPaymentsQuery.in("lead_id", filteredLeadIds)
+    }
+
+    // Get payments with expiry dates from manual_payment
+    let manualPaymentsQuery = supabase
+      .from("manual_payment")
+      .select("*")
+      .not("plan_expiry", "is", null)
+      .eq("status", "completed")
+    
+    if (filteredLeadIds !== null && filteredLeadIds.length > 0) {
+      manualPaymentsQuery = manualPaymentsQuery.in("lead_id", filteredLeadIds)
+    }
+
+    const { data: linkPayments, error: linkErr } = await linkPaymentsQuery
+    const { data: manualPayments, error: manErr } = await manualPaymentsQuery
+
+    if (linkErr) throw linkErr
+    if (manErr) throw manErr
+
+    // Combine payments from both tables
+    const allPayments = [...(linkPayments || []), ...(manualPayments || [])]
+
+    const expiryReports: ExpiryReport[] = []
+
+    for (const lead of leads || []) {
+      const user = users?.find((u) => u.email === lead.email || u.phone === lead.phone_number)
+      const clientName = user ? `${user.first_name} ${user.last_name}`.trim() : lead.name || "Unknown"
+      
+      // Get coach information
+      const coach = user ? await getClientCoach(user.id) : "Not Assigned"
+
+      // Find latest payment with expiry
+      const leadPayments = allPayments.filter((p: any) => p.lead_id === lead.id)
+      if (leadPayments.length > 0) {
+        const latestPayment = leadPayments.sort(
+          (a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        )[0]
+
+        const joiningDate = user?.created_at || lead.created_at
+        const activationDate = latestPayment.payment_date || latestPayment.created_at
+        const expiryDate = latestPayment.plan_expiry
+        
+        // Calculate left days
+        const today = new Date()
+        const expiry = new Date(expiryDate)
+        const leftDays = Math.ceil((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+        
+        // Determine renewal status
+        let renewalStatus = "Active"
+        if (leftDays <= 0) renewalStatus = "Expired"
+        else if (leftDays <= 30) renewalStatus = "Renewal Due"
+        else if (leftDays <= 60) renewalStatus = "Upcoming Renewal"
+
+        expiryReports.push({
+          id: lead.id,
+          clientName,
+          contact: lead.phone_number || user?.phone || "N/A",
+          package: latestPayment.plan || latestPayment.package_name || "Standard",
+          joiningDate,
+          activationDate,
+          expiryDate,
+          leftDays,
+          counselor: lead.counselor || "Unassigned",
+          coach,
+          renewalStatus,
+          email: lead.email || user?.email || "",
+        })
+      }
+    }
+
+    setExpiryReports(expiryReports)
+  } catch (err: any) {
+    console.error("Error fetching expiry reports:", err)
+    setError("Failed to fetch expiry reports")
+  } finally {
+    setLoading(false)
+  }
+}
+
+// Fix fetchRenewalReports function
+const fetchRenewalReports = async () => {
+  try {
+    setLoading(true)
+    setError(null)
+
+    const filteredLeadIds = getFilteredLeadIds()
+
+    // Get all leads
+    let leadsQuery = supabase.from("leads").select("*")
+    if (filteredLeadIds !== null) {
+      if (filteredLeadIds.length === 0) {
+        setRenewalReports([])
+        return
+      }
+      leadsQuery = leadsQuery.in("id", filteredLeadIds)
+    }
+
+    const { data: leads, error: leadsError } = await leadsQuery
+    if (leadsError) throw leadsError
+
+    // Get all users for mapping
+    const { data: users, error: usersError } = await supabase
+      .from("users")
+      .select("id, email, phone, first_name, last_name, created_at")
+    if (usersError) throw usersError
+
+    // Get current month range
+    const currentDate = new Date()
+    const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1)
+    const lastDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0)
+    
+    // Format dates for Supabase query
+    const firstDayStr = firstDayOfMonth.toISOString().split('T')[0]
+    const lastDayStr = lastDayOfMonth.toISOString().split('T')[0]
+
+    // Get payments with expiry dates in current month from payment_links
+    let linkPaymentsQuery = supabase
+      .from("payment_links")
+      .select("*")
+      .eq("status", "completed")
+      .gte("plan_expiry", firstDayStr)
+      .lte("plan_expiry", lastDayStr)
+    
+    if (filteredLeadIds !== null && filteredLeadIds.length > 0) {
+      linkPaymentsQuery = linkPaymentsQuery.in("lead_id", filteredLeadIds)
+    }
+
+    // Get payments with expiry dates in current month from manual_payment
+    let manualPaymentsQuery = supabase
+      .from("manual_payment")
+      .select("*")
+      .eq("status", "completed")
+      .gte("plan_expiry", firstDayStr)
+      .lte("plan_expiry", lastDayStr)
+    
+    if (filteredLeadIds !== null && filteredLeadIds.length > 0) {
+      manualPaymentsQuery = manualPaymentsQuery.in("lead_id", filteredLeadIds)
+    }
+
+    const { data: linkPayments, error: linkErr } = await linkPaymentsQuery
+    const { data: manualPayments, error: manErr } = await manualPaymentsQuery
+
+    if (linkErr) throw linkErr
+    if (manErr) throw manErr
+
+    // Combine payments from both tables
+    const allPayments = [...(linkPayments || []), ...(manualPayments || [])]
+
+    const renewalReports: RenewalReport[] = []
+
+    for (const lead of leads || []) {
+      const user = users?.find((u) => u.email === lead.email || u.phone === lead.phone_number)
+      const clientName = user ? `${user.first_name} ${user.last_name}`.trim() : lead.name || "Unknown"
+      
+      // Get coach information
+      const coach = user ? await getClientCoach(user.id) : "Not Assigned"
+
+      // Find payments for this lead
+      const leadPayments = allPayments.filter((p: any) => p.lead_id === lead.id)
+      if (leadPayments.length > 0) {
+        for (const payment of leadPayments) {
+          const joiningDate = user?.created_at || lead.created_at
+          const activationDate = payment.payment_date || payment.created_at
+          const expiryDate = payment.plan_expiry
+          
+          // Calculate left days
+          const today = new Date()
+          const expiry = new Date(expiryDate)
+          const leftDays = Math.ceil((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+
+          renewalReports.push({
+            id: `${lead.id}_${payment.id}`,
+            clientName,
+            contact: lead.phone_number || user?.phone || "N/A",
+            package: payment.plan || payment.package_name || "Standard",
+            joiningDate,
+            activationDate,
+            expiryDate,
+            leftDays,
+            counselor: lead.counselor || "Unassigned",
+            coach,
+            renewalMonth: `${currentDate.getMonth() + 1}/${currentDate.getFullYear()}`,
+          })
+        }
+      }
+    }
+
+    setRenewalReports(renewalReports)
+  } catch (err: any) {
+    console.error("Error fetching renewal reports:", err)
+    setError("Failed to fetch renewal reports")
+  } finally {
+    setLoading(false)
+  }
+}
+
+  // Fetch freezing reports
+  const fetchFreezingReports = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+
+      const filteredLeadIds = getFilteredLeadIds()
+
+      // Get membership freezes
+      let freezesQuery = supabase.from("membership_freezes").select("*")
+      
+      // We need to filter by lead/user access
+      const { data: freezes, error: freezesError } = await freezesQuery
+      if (freezesError) throw freezesError
+
+      // Get users
+      const { data: users, error: usersError } = await supabase.from("users").select("id, email, phone, first_name, last_name")
+      if (usersError) throw usersError
+
+      // Get leads for mapping
+      const { data: leads, error: leadsError } = await supabase.from("leads").select("*")
+      if (leadsError) throw leadsError
+
+      const freezingReports: FreezingReport[] = []
+
+      for (const freeze of freezes || []) {
+        const user = users?.find((u) => u.id === freeze.user_id)
+        if (!user) continue
+
+        const lead = leads?.find((l) => l.email === user.email || l.phone_number === user.phone)
+        if (!lead && filteredLeadIds !== null) continue // Skip if no lead found for executives
+
+        // Check if executive has access to this lead
+        if (filteredLeadIds !== null && !filteredLeadIds.includes(lead.id)) {
+          continue
+        }
+
+        // Get coach
+        const coach = await getClientCoach(user.id)
+
+        // Calculate frozen days
+        const start = new Date(freeze.freeze_start_date)
+        const end = new Date(freeze.freeze_end_date)
+        const frozenDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+
+        freezingReports.push({
+          id: freeze.id.toString(),
+          clientName: `${user.first_name} ${user.last_name}`,
+          contact: user.phone || "N/A",
+          package: freeze.plan_type || "Standard",
+          activationDate: user.created_at || "N/A",
+          frozenDays,
+          updatedExpiryDate: freeze.new_expiry || "Not Set",
+          counselor: lead?.counselor || "Unassigned",
+          coach,
+          reason: freeze.is_read ? "Processed" : "Pending Review", // Placeholder for reason
+        })
+      }
+
+      setFreezingReports(freezingReports)
+    } catch (err: any) {
+      console.error("Error fetching freezing reports:", err)
+      setError("Failed to fetch freezing reports")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Fetch follow-up reports
+  const fetchFollowUpReports = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+
+      const filteredLeadIds = getFilteredLeadIds()
+
+      // Get leads with follow-up dates
+      let leadsQuery = supabase.from("leads").select("*").not("follow_up_date", "is", null)
+      if (filteredLeadIds !== null) {
+        if (filteredLeadIds.length === 0) {
+          setFollowUpReports([])
+          return
+        }
+        leadsQuery = leadsQuery.in("id", filteredLeadIds)
+      }
+
+      const { data: leads, error: leadsError } = await leadsQuery
+      if (leadsError) throw leadsError
+
+      const followUpReports: FollowUpReport[] = (leads || []).map(lead => ({
+        id: lead.id,
+        name: lead.name,
+        contact: lead.phone_number,
+        counselor: lead.counselor || "Unassigned",
+        lastContact: lead.last_activity_date || lead.created_at,
+        source: lead.source || "Unknown",
+        leadDate: lead.created_at,
+        status: lead.status === "Converted" ? "Done" : 
+                lead.status === "Lost" ? "Failed" : "Pending",
+        followUpDate: lead.follow_up_date,
+        attempts: lead.lead_score || 1,
+      }))
+
+      setFollowUpReports(followUpReports)
+    } catch (err: any) {
+      console.error("Error fetching follow-up reports:", err)
+      setError("Failed to fetch follow-up reports")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Fetch appointment reports
+  const fetchAppointmentReports = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+
+      const filteredLeadIds = getFilteredLeadIds()
+
+      // Get leads (considering all leads as potential appointments)
+      let leadsQuery = supabase.from("leads").select("*")
+      if (filteredLeadIds !== null) {
+        if (filteredLeadIds.length === 0) {
+          setAppointmentReports([])
+          return
+        }
+        leadsQuery = leadsQuery.in("id", filteredLeadIds)
+      }
+
+      const { data: leads, error: leadsError } = await leadsQuery
+      if (leadsError) throw leadsError
+
+      // Get BDE information (assuming BDE is the user who created/modified the lead)
+      const { data: users, error: usersError } = await supabase.from("users").select("id, email, first_name, last_name")
+      if (usersError) throw usersError
+
+      const appointmentReports: AppointmentReport[] = (leads || []).map(lead => {
+        // Find BDE (could be the user associated with the lead or counselor)
+        const bdeUser = users?.find(u => u.email === lead.email) || 
+                       users?.find(u => `${u.first_name} ${u.last_name}` === lead.counselor)
+        
+        return {
+          id: lead.id,
+          name: lead.name,
+          contact: lead.phone_number,
+          counselor: lead.counselor || "Unassigned",
+          bde: bdeUser ? `${bdeUser.first_name} ${bdeUser.last_name}` : "N/A",
+          source: lead.source || "Unknown",
+          leadDate: lead.created_at,
+          followUpDate: lead.follow_up_date || "Not Set",
+          attempts: lead.lead_score || 1,
+          appointmentStatus: lead.status === "Converted" ? "Successful" : 
+                           lead.status === "Lost" ? "Failed" : "Scheduled",
+        }
+      })
+
+      setAppointmentReports(appointmentReports)
+    } catch (err: any) {
+      console.error("Error fetching appointment reports:", err)
+      setError("Failed to fetch appointment reports")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Fetch referral reports
+  const fetchReferralReports = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+
+      const filteredLeadIds = getFilteredLeadIds()
+
+      // Get leads with referral source
+      let leadsQuery = supabase.from("leads").select("*").ilike("source", "%referral%")
+      if (filteredLeadIds !== null) {
+        if (filteredLeadIds.length === 0) {
+          setReferralReports([])
+          return
+        }
+        leadsQuery = leadsQuery.in("id", filteredLeadIds)
+      }
+
+      const { data: leads, error: leadsError } = await leadsQuery
+      if (leadsError) throw leadsError
+
+      // Try to get referral data from users table (assuming referrer information might be in notes or extra field)
+      const { data: users, error: usersError } = await supabase.from("users").select("*")
+      if (usersError) throw usersError
+
+      const referralReports: ReferralReport[] = (leads || []).map(lead => {
+        // Try to extract referrer from notes or source
+        let referredBy = "Unknown"
+        let referrerContact = "N/A"
+        
+        if (lead.notes && lead.notes.includes("referred by")) {
+          const match = lead.notes.match(/referred by\s*(.*?)(?:\s|$)/i)
+          if (match) referredBy = match[1]
+        } else if (lead.source && lead.source.includes("referral-")) {
+          referredBy = lead.source.replace("referral-", "").split("-")[0]
+        }
+
+        // Try to find referrer contact
+        const referrerUser = users?.find(u => 
+          u.first_name?.includes(referredBy) || 
+          u.last_name?.includes(referredBy) ||
+          u.email?.includes(referredBy)
+        )
+        if (referrerUser) {
+          referrerContact = referrerUser.phone || "N/A"
+        }
+
+        return {
+          id: lead.id,
+          name: lead.name,
+          contact: lead.phone_number,
+          referredBy,
+          referrerContact,
+          counselor: lead.counselor || "Unassigned",
+          leadDate: lead.created_at,
+          leadStatus: lead.status || "New",
+          followUpDate: lead.follow_up_date || "Not Set",
+        }
+      })
+
+      setReferralReports(referralReports)
+    } catch (err: any) {
+      console.error("Error fetching referral reports:", err)
+      setError("Failed to fetch referral reports")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Fetch data when report type changes
   useEffect(() => {
-    // Only fetch data if user access is initialized
     if (!userAccessInitialized) return
 
-    console.log(
-      "Fetching data for report:",
-      activeReport,
-      "User role:",
-      currentUserRole,
-      "Assigned leads:",
-      assignedLeadIds.length,
-    )
+    console.log("Fetching data for report:", activeReport)
 
     // Reset pagination when changing report type
     setCurrentPage(1)
@@ -909,11 +1075,23 @@ export function ReportsTab() {
       case "activation":
         fetchActivationReports()
         break
-      case "conversion":
-        fetchConversionReports()
-        break
       case "expiry":
         fetchExpiryReports()
+        break
+      case "renewal":
+        fetchRenewalReports()
+        break
+      case "freezing":
+        fetchFreezingReports()
+        break
+      case "followup":
+        fetchFollowUpReports()
+        break
+      case "appointments":
+        fetchAppointmentReports()
+        break
+      case "referral":
+        fetchReferralReports()
         break
       default:
         break
@@ -963,10 +1141,10 @@ export function ReportsTab() {
       const matchesCounselor = counselorFilter === "all" || item.counselor === counselorFilter
       const matchesPackage = packageFilter === "all" || item.package?.toLowerCase() === packageFilter
 
-      // Date range filter (if applicable)
+      // Date range filter
       let matchesDateRange = true
       if (dateRange?.from || dateRange?.to) {
-        const itemDate = new Date(item.date || item.joiningDate || item.leadDate || item.activationDate)
+        const itemDate = new Date(item.date || item.joiningDate || item.leadDate || item.activationDate || item.followUpDate)
         if (dateRange.from && dateRange.to) {
           matchesDateRange = itemDate >= dateRange.from && itemDate <= dateRange.to
         } else if (dateRange.from) {
@@ -1031,22 +1209,31 @@ export function ReportsTab() {
     
     switch (activeReport) {
       case "balance":
-        filteredData = getFilteredAndSortedData(balanceReports, ["clientName", "package", "status"])
+        filteredData = getFilteredAndSortedData(balanceReports, ["clientName", "contact", "package", "counselor"])
         break
       case "sales":
-        filteredData = getFilteredAndSortedData(salesReports, ["clientName", "package", "counselor", "status", "source"])
-        break
-      case "followup":
-        filteredData = getFilteredAndSortedData(followUpReports, ["leadName", "counselor", "status"])
-        break
-      case "conversion":
-        filteredData = getFilteredAndSortedData(conversionReports, ["leadName", "source", "counselor"])
+        filteredData = getFilteredAndSortedData(salesReports, ["clientName", "contact", "package", "counselor", "source", "city"])
         break
       case "activation":
-        filteredData = getFilteredAndSortedData(activationReports, ["clientName", "package", "counselor"])
+        filteredData = getFilteredAndSortedData(activationReports, ["clientName", "contact", "package", "counselor"])
         break
       case "expiry":
-        filteredData = getFilteredAndSortedData(expiryReports, ["clientName", "package", "status"])
+        filteredData = getFilteredAndSortedData(expiryReports, ["clientName", "contact", "package", "counselor", "renewalStatus"])
+        break
+      case "renewal":
+        filteredData = getFilteredAndSortedData(renewalReports, ["clientName", "contact", "package", "counselor", "renewalMonth"])
+        break
+      case "freezing":
+        filteredData = getFilteredAndSortedData(freezingReports, ["clientName", "contact", "package", "counselor", "reason"])
+        break
+      case "followup":
+        filteredData = getFilteredAndSortedData(followUpReports, ["name", "contact", "counselor", "source", "status"])
+        break
+      case "appointments":
+        filteredData = getFilteredAndSortedData(appointmentReports, ["name", "contact", "counselor", "bde", "source", "appointmentStatus"])
+        break
+      case "referral":
+        filteredData = getFilteredAndSortedData(referralReports, ["name", "contact", "counselor", "referredBy", "leadStatus"])
         break
       default:
         filteredData = []
@@ -1075,52 +1262,71 @@ export function ReportsTab() {
       case "balance":
         return {
           total: balanceReports.length,
-          paid: balanceReports.filter((r) => r.status === "Paid").length,
-          pending: balanceReports.filter((r) => r.status === "Pending").length,
+          paid: balanceReports.filter((r) => r.balance <= 0).length,
+          pending: balanceReports.filter((r) => r.balance > 0).length,
           totalBalance: balanceReports.reduce((sum, r) => sum + r.balance, 0),
+          overdue: balanceReports.filter((r) => r.dueDays < 0).length,
         }
       case "sales":
         return {
           total: salesReports.length,
-          completed: salesReports.filter((r) => r.status === "Completed").length,
+          completed: salesReports.filter((r) => r.amount > 0).length,
           totalRevenue: salesReports.reduce((sum, r) => sum + r.amount, 0),
+          upsell: salesReports.filter((r) => r.upsellRenewal === "Upsell").length,
+          renewal: salesReports.filter((r) => r.upsellRenewal === "Renewal").length,
         }
       case "followup":
         return {
           total: followUpReports.length,
+          done: followUpReports.filter((r) => r.status === "Done").length,
           pending: followUpReports.filter((r) => r.status === "Pending").length,
-          overdue: followUpReports.filter((r) => r.status === "Overdue").length,
-          completed: followUpReports.filter((r) => r.status === "Completed").length,
-        }
-      case "conversion":
-        return {
-          total: conversionReports.length,
-          converted: conversionReports.filter((r) => r.status === "Converted").length,
-          lost: conversionReports.filter((r) => r.status === "Lost").length,
-          conversionRate:
-            conversionReports.length > 0
-              ? (
-                  (conversionReports.filter((r) => r.status === "Converted").length / conversionReports.length) *
-                  100
-                ).toFixed(1)
-              : "0",
+          failed: followUpReports.filter((r) => r.status === "Failed").length,
+          totalAttempts: followUpReports.reduce((sum, r) => sum + r.attempts, 0),
         }
       case "activation":
         return {
           total: activationReports.length,
-          active: activationReports.filter((r) => r.status === "Active").length,
-          pending: activationReports.filter((r) => r.status === "Pending").length,
-          avgDelay:
-            activationReports.length > 0
-              ? (activationReports.reduce((sum, r) => sum + r.activationDelay, 0) / activationReports.length).toFixed(1)
-              : "0",
+          active: activationReports.filter((r) => r.leftDays > 0).length,
+          expired: activationReports.filter((r) => r.leftDays <= 0).length,
+          expiringSoon: activationReports.filter((r) => r.leftDays > 0 && r.leftDays <= 30).length,
         }
       case "expiry":
         return {
           total: expiryReports.length,
-          active: expiryReports.filter((r) => r.status === "Active").length,
-          expired: expiryReports.filter((r) => r.status === "Expired").length,
-          expiringThisMonth: expiryReports.filter((r) => r.daysRemaining <= 30 && r.daysRemaining > 0).length,
+          active: expiryReports.filter((r) => r.leftDays > 0).length,
+          expired: expiryReports.filter((r) => r.leftDays <= 0).length,
+          renewalDue: expiryReports.filter((r) => r.leftDays > 0 && r.leftDays <= 30).length,
+        }
+      case "renewal":
+        return {
+          total: renewalReports.length,
+          thisMonth: renewalReports.filter((r) => r.leftDays > 0 && r.leftDays <= 30).length,
+          nextMonth: renewalReports.filter((r) => r.leftDays > 30 && r.leftDays <= 60).length,
+          overdue: renewalReports.filter((r) => r.leftDays <= 0).length,
+        }
+      case "freezing":
+        return {
+          total: freezingReports.length,
+          active: freezingReports.filter((r) => r.frozenDays > 0).length,
+          completed: freezingReports.filter((r) => r.reason === "Processed").length,
+          pending: freezingReports.filter((r) => r.reason === "Pending Review").length,
+          totalFrozenDays: freezingReports.reduce((sum, r) => sum + r.frozenDays, 0),
+        }
+      case "appointments":
+        return {
+          total: appointmentReports.length,
+          successful: appointmentReports.filter((r) => r.appointmentStatus === "Successful").length,
+          failed: appointmentReports.filter((r) => r.appointmentStatus === "Failed").length,
+          scheduled: appointmentReports.filter((r) => r.appointmentStatus === "Scheduled").length,
+          totalAttempts: appointmentReports.reduce((sum, r) => sum + r.attempts, 0),
+        }
+      case "referral":
+        return {
+          total: referralReports.length,
+          converted: referralReports.filter((r) => r.leadStatus === "Converted").length,
+          pending: referralReports.filter((r) => r.leadStatus === "New" || r.leadStatus === "Contacted").length,
+          lost: referralReports.filter((r) => r.leadStatus === "Lost").length,
+          uniqueReferrers: new Set(referralReports.map(r => r.referredBy)).size,
         }
       default:
         return {}
@@ -1138,28 +1344,37 @@ export function ReportsTab() {
   const goToLastPage = () => setCurrentPage(reportDataInfo.totalPages)
   const goToPage = (page: number) => setCurrentPage(Math.max(1, Math.min(reportDataInfo.totalPages, page)))
 
-  // Export to CSV function - exports all filtered data, not just current page
+  // Export to CSV function
   const exportToCSV = () => {
     let allFilteredData = []
     
     switch (activeReport) {
       case "balance":
-        allFilteredData = getFilteredAndSortedData(balanceReports, ["clientName", "package", "status"])
+        allFilteredData = getFilteredAndSortedData(balanceReports, ["clientName", "contact", "package", "counselor"])
         break
       case "sales":
-        allFilteredData = getFilteredAndSortedData(salesReports, ["clientName", "package", "counselor", "status", "source"])
-        break
-      case "followup":
-        allFilteredData = getFilteredAndSortedData(followUpReports, ["leadName", "counselor", "status"])
-        break
-      case "conversion":
-        allFilteredData = getFilteredAndSortedData(conversionReports, ["leadName", "source", "counselor"])
+        allFilteredData = getFilteredAndSortedData(salesReports, ["clientName", "contact", "package", "counselor", "source", "city"])
         break
       case "activation":
-        allFilteredData = getFilteredAndSortedData(activationReports, ["clientName", "package", "counselor"])
+        allFilteredData = getFilteredAndSortedData(activationReports, ["clientName", "contact", "package", "counselor"])
         break
       case "expiry":
-        allFilteredData = getFilteredAndSortedData(expiryReports, ["clientName", "package", "status"])
+        allFilteredData = getFilteredAndSortedData(expiryReports, ["clientName", "contact", "package", "counselor", "renewalStatus"])
+        break
+      case "renewal":
+        allFilteredData = getFilteredAndSortedData(renewalReports, ["clientName", "contact", "package", "counselor", "renewalMonth"])
+        break
+      case "freezing":
+        allFilteredData = getFilteredAndSortedData(freezingReports, ["clientName", "contact", "package", "counselor", "reason"])
+        break
+      case "followup":
+        allFilteredData = getFilteredAndSortedData(followUpReports, ["name", "contact", "counselor", "source", "status"])
+        break
+      case "appointments":
+        allFilteredData = getFilteredAndSortedData(appointmentReports, ["name", "contact", "counselor", "bde", "source", "appointmentStatus"])
+        break
+      case "referral":
+        allFilteredData = getFilteredAndSortedData(referralReports, ["name", "contact", "counselor", "referredBy", "leadStatus"])
         break
       default:
         allFilteredData = []
@@ -1210,18 +1425,6 @@ export function ReportsTab() {
         </Card>
       )}
 
-      {/* Debug Info Display for Expiry Reports */}
-      {activeReport === "expiry" && debugInfo && (
-        <Card className="border-blue-200 bg-blue-50">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-blue-700">
-              <Info className="h-4 w-4" />
-              <span className="text-sm">{debugInfo}</span>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
       {/* Report Type Selector */}
       <Card className="border-0 shadow-xl bg-white/80 backdrop-blur-sm">
         <CardHeader>
@@ -1235,10 +1438,13 @@ export function ReportsTab() {
             {[
               { key: "balance", label: "Balance Reports", icon: DollarSign },
               { key: "sales", label: "Sales Reports", icon: TrendingUp },
-              { key: "followup", label: "Follow Up Reports", icon: Phone },
-              { key: "conversion", label: "Conversion Reports", icon: Target },
               { key: "activation", label: "Membership Activation", icon: CheckCircle },
               { key: "expiry", label: "Membership Expiry", icon: AlertTriangle },
+              { key: "renewal", label: "Renewal Reports", icon: RefreshCw },
+              { key: "freezing", label: "Freezing Reports", icon: Snowflake },
+              { key: "followup", label: "Follow Up Reports", icon: Phone },
+              { key: "appointments", label: "Appointments", icon: CalendarIcon },
+              { key: "referral", label: "Referral Reports", icon: Users },
             ].map(({ key, label, icon: Icon }) => (
               <Button
                 key={key}
@@ -1327,7 +1533,6 @@ export function ReportsTab() {
                     <>
                       <SelectItem value="paid">Paid</SelectItem>
                       <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="no payment">No Payment</SelectItem>
                     </>
                   )}
                   {activeReport === "sales" && (
@@ -1338,29 +1543,42 @@ export function ReportsTab() {
                   )}
                   {activeReport === "followup" && (
                     <>
-                      <SelectItem value="scheduled">Scheduled</SelectItem>
+                      <SelectItem value="done">Done</SelectItem>
                       <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="completed">Completed</SelectItem>
-                      <SelectItem value="overdue">Overdue</SelectItem>
-                    </>
-                  )}
-                  {activeReport === "conversion" && (
-                    <>
-                      <SelectItem value="converted">Converted</SelectItem>
-                      <SelectItem value="lost">Lost</SelectItem>
+                      <SelectItem value="failed">Failed</SelectItem>
                     </>
                   )}
                   {activeReport === "activation" && (
                     <>
                       <SelectItem value="active">Active</SelectItem>
-                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="expired">Expired</SelectItem>
                     </>
                   )}
                   {activeReport === "expiry" && (
                     <>
                       <SelectItem value="active">Active</SelectItem>
                       <SelectItem value="expired">Expired</SelectItem>
-                      <SelectItem value="no active membership">No Active Membership</SelectItem>
+                      <SelectItem value="renewal due">Renewal Due</SelectItem>
+                    </>
+                  )}
+                  {activeReport === "freezing" && (
+                    <>
+                      <SelectItem value="processed">Processed</SelectItem>
+                      <SelectItem value="pending review">Pending Review</SelectItem>
+                    </>
+                  )}
+                  {activeReport === "appointments" && (
+                    <>
+                      <SelectItem value="successful">Successful</SelectItem>
+                      <SelectItem value="failed">Failed</SelectItem>
+                      <SelectItem value="scheduled">Scheduled</SelectItem>
+                    </>
+                  )}
+                  {activeReport === "referral" && (
+                    <>
+                      <SelectItem value="converted">Converted</SelectItem>
+                      <SelectItem value="pending">Pending</SelectItem>
+                      <SelectItem value="lost">Lost</SelectItem>
                     </>
                   )}
                 </SelectContent>
@@ -1379,7 +1597,6 @@ export function ReportsTab() {
                   <SelectItem value="premium">Premium</SelectItem>
                   <SelectItem value="enterprise">Enterprise</SelectItem>
                   <SelectItem value="no package">No Package</SelectItem>
-                  <SelectItem value="no active package">No Active Package</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1452,18 +1669,14 @@ export function ReportsTab() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-emerald-600">
-                {typeof value === "number" && key.includes("total") && key !== "total"
+                {typeof value === "number" && (key.includes("total") || key.includes("Revenue") || key.includes("Balance"))
                   ? `₹${value.toLocaleString()}`
                   : value}
               </div>
               <p className="text-xs text-slate-600">
-                {key === "conversionRate"
-                  ? "Success rate"
-                  : key === "avgDelay"
-                    ? "Days average"
-                    : key.includes("total") && key !== "total"
-                      ? "Total amount"
-                      : "Count"}
+                {key === "total" ? "Total records" : 
+                 key === "conversionRate" ? "Success rate" :
+                 key.includes("total") && key !== "total" ? "Total amount" : "Count"}
               </p>
             </CardContent>
           </Card>
@@ -1521,16 +1734,14 @@ export function ReportsTab() {
               <p className="text-sm text-center">
                 {currentUserRole === EXECUTIVE_ROLE && assignedLeadIds.length === 0
                   ? "You don't have any assigned leads yet."
-                  : activeReport === "expiry" 
-                    ? "No membership expiry data found. This could mean: (1) No payments with expiry dates exist, (2) All payments lack expiry information, or (3) No leads have been assigned to you."
-                    : "No data found for the selected report type and filters."}
+                  : "No data found for the selected report type and filters."}
               </p>
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  {/* Dynamic headers based on report type */}
+                  {/* Balance Report Headers */}
                   {activeReport === "balance" && (
                     <>
                       <TableHead>
@@ -1543,6 +1754,7 @@ export function ReportsTab() {
                           {getSortIcon("clientName")}
                         </Button>
                       </TableHead>
+                      <TableHead>Contact #</TableHead>
                       <TableHead>
                         <Button
                           variant="ghost"
@@ -1596,16 +1808,19 @@ export function ReportsTab() {
                       <TableHead>
                         <Button
                           variant="ghost"
-                          onClick={() => handleSort("status")}
+                          onClick={() => handleSort("dueDays")}
                           className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
                         >
-                          Status
-                          {getSortIcon("status")}
+                          Due Days
+                          {getSortIcon("dueDays")}
                         </Button>
                       </TableHead>
-                      <TableHead>Payment Method</TableHead>
+                      <TableHead>Counselor</TableHead>
+                      <TableHead>Coach</TableHead>
                     </>
                   )}
+
+                  {/* Sales Report Headers */}
                   {activeReport === "sales" && (
                     <>
                       <TableHead>
@@ -1618,16 +1833,8 @@ export function ReportsTab() {
                           {getSortIcon("date")}
                         </Button>
                       </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("clientName")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Client
-                          {getSortIcon("clientName")}
-                        </Button>
-                      </TableHead>
+                      <TableHead>Client</TableHead>
+                      <TableHead>Contact #</TableHead>
                       <TableHead>
                         <Button
                           variant="ghost"
@@ -1648,195 +1855,29 @@ export function ReportsTab() {
                           {getSortIcon("amount")}
                         </Button>
                       </TableHead>
+                      <TableHead>Upsell/Renewal</TableHead>
+                      <TableHead>Counselor</TableHead>
                       <TableHead>
                         <Button
                           variant="ghost"
-                          onClick={() => handleSort("counselor")}
+                          onClick={() => handleSort("balance")}
                           className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
                         >
-                          Counselor
-                          {getSortIcon("counselor")}
+                          Balance
+                          {getSortIcon("balance")}
                         </Button>
                       </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("status")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Status
-                          {getSortIcon("status")}
-                        </Button>
-                      </TableHead>
+                      <TableHead>City</TableHead>
                       <TableHead>Source</TableHead>
                     </>
                   )}
-                  {activeReport === "followup" && (
-                    <>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("leadName")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Lead Name
-                          {getSortIcon("leadName")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("counselor")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Counselor
-                          {getSortIcon("counselor")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("lastContact")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Last Contact
-                          {getSortIcon("lastContact")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("nextFollowUp")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Next Follow-up
-                          {getSortIcon("nextFollowUp")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("priority")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Priority
-                          {getSortIcon("priority")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("status")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Status
-                          {getSortIcon("status")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>Contact Method</TableHead>
-                      <TableHead>Attempts</TableHead>
-                    </>
-                  )}
-                  {activeReport === "conversion" && (
-                    <>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("leadName")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Lead Name
-                          {getSortIcon("leadName")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("leadDate")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Lead Date
-                          {getSortIcon("leadDate")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("conversionDate")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Conversion Date
-                          {getSortIcon("conversionDate")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("daysTaken")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Days Taken
-                          {getSortIcon("daysTaken")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("source")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Source
-                          {getSortIcon("source")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("counselor")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Counselor
-                          {getSortIcon("counselor")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("status")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Status
-                          {getSortIcon("status")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>Email</TableHead>
-                      <TableHead>Payments</TableHead>
-                      <TableHead>Total Paid</TableHead>
-                      <TableHead>Last Payment</TableHead>
-                    </>
-                  )}
+
+                  {/* Membership Activation Headers */}
                   {activeReport === "activation" && (
                     <>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("clientName")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Client Name
-                          {getSortIcon("clientName")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("package")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Package
-                          {getSortIcon("package")}
-                        </Button>
-                      </TableHead>
+                      <TableHead>Client Name</TableHead>
+                      <TableHead>Contact #</TableHead>
+                      <TableHead>Package</TableHead>
                       <TableHead>
                         <Button
                           variant="ghost"
@@ -1847,113 +1888,138 @@ export function ReportsTab() {
                           {getSortIcon("joiningDate")}
                         </Button>
                       </TableHead>
+                      <TableHead>Activation Date</TableHead>
+                      <TableHead>Expiry Date</TableHead>
                       <TableHead>
                         <Button
                           variant="ghost"
-                          onClick={() => handleSort("activationDate")}
+                          onClick={() => handleSort("leftDays")}
                           className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
                         >
-                          Activation Date
-                          {getSortIcon("activationDate")}
+                          Left Days
+                          {getSortIcon("leftDays")}
                         </Button>
                       </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("activationDelay")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Delay (Days)
-                          {getSortIcon("activationDelay")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("status")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Status
-                          {getSortIcon("status")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("counselor")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Counselor
-                          {getSortIcon("counselor")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>Activated By</TableHead>
+                      <TableHead>Counselor</TableHead>
+                      <TableHead>Coach</TableHead>
                     </>
                   )}
+
+                  {/* Membership Expiry Headers */}
                   {activeReport === "expiry" && (
                     <>
+                      <TableHead>Client Name</TableHead>
+                      <TableHead>Contact #</TableHead>
+                      <TableHead>Package</TableHead>
+                      <TableHead>Joining Date</TableHead>
+                      <TableHead>Activation Date</TableHead>
+                      <TableHead>Expiry Date</TableHead>
                       <TableHead>
                         <Button
                           variant="ghost"
-                          onClick={() => handleSort("clientName")}
+                          onClick={() => handleSort("leftDays")}
                           className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
                         >
-                          Client Name
-                          {getSortIcon("clientName")}
+                          Left Days
+                          {getSortIcon("leftDays")}
                         </Button>
                       </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("package")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Package
-                          {getSortIcon("package")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("activationDate")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Activation Date
-                          {getSortIcon("activationDate")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("expiryDate")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Expiry Date
-                          {getSortIcon("expiryDate")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("daysRemaining")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Days Remaining
-                          {getSortIcon("daysRemaining")}
-                        </Button>
-                      </TableHead>
-                      <TableHead>
-                        <Button
-                          variant="ghost"
-                          onClick={() => handleSort("status")}
-                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
-                        >
-                          Status
-                          {getSortIcon("status")}
-                        </Button>
-                      </TableHead>
+                      <TableHead>Counselor</TableHead>
+                      <TableHead>Coach</TableHead>
                       <TableHead>Renewal Status</TableHead>
-                      <TableHead>Email</TableHead>
+                    </>
+                  )}
+
+                  {/* Renewal Report Headers */}
+                  {activeReport === "renewal" && (
+                    <>
+                      <TableHead>Client Name</TableHead>
+                      <TableHead>Contact #</TableHead>
+                      <TableHead>Package</TableHead>
+                      <TableHead>Joining Date</TableHead>
+                      <TableHead>Activation Date</TableHead>
+                      <TableHead>Expiry Date</TableHead>
+                      <TableHead>
+                        <Button
+                          variant="ghost"
+                          onClick={() => handleSort("leftDays")}
+                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
+                        >
+                          Left Days
+                          {getSortIcon("leftDays")}
+                        </Button>
+                      </TableHead>
+                      <TableHead>Counselor</TableHead>
+                      <TableHead>Coach</TableHead>
+                      <TableHead>Renewal Month</TableHead>
+                    </>
+                  )}
+
+                  {/* Freezing Report Headers */}
+                  {activeReport === "freezing" && (
+                    <>
+                      <TableHead>Client Name</TableHead>
+                      <TableHead>Contact #</TableHead>
+                      <TableHead>Package</TableHead>
+                      <TableHead>Activation Date</TableHead>
+                      <TableHead>
+                        <Button
+                          variant="ghost"
+                          onClick={() => handleSort("frozenDays")}
+                          className="h-auto p-0 font-semibold hover:bg-transparent flex items-center gap-1"
+                        >
+                          Frozen Days
+                          {getSortIcon("frozenDays")}
+                        </Button>
+                      </TableHead>
+                      <TableHead>Updated Expiry Date</TableHead>
+                      <TableHead>Counselor</TableHead>
+                      <TableHead>Coach</TableHead>
+                      <TableHead>Reason</TableHead>
+                    </>
+                  )}
+
+                  {/* Follow-up Report Headers */}
+                  {activeReport === "followup" && (
+                    <>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Contact #</TableHead>
+                      <TableHead>Counselor</TableHead>
+                      <TableHead>Last Contact</TableHead>
+                      <TableHead>Source</TableHead>
+                      <TableHead>Lead Date</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Follow Up Date</TableHead>
+                      <TableHead>Attempts</TableHead>
+                    </>
+                  )}
+
+                  {/* Appointment Report Headers */}
+                  {activeReport === "appointments" && (
+                    <>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Contact #</TableHead>
+                      <TableHead>Counselor</TableHead>
+                      <TableHead>BDE</TableHead>
+                      <TableHead>Source</TableHead>
+                      <TableHead>Lead Date</TableHead>
+                      <TableHead>Follow Up Date</TableHead>
+                      <TableHead>Attempts</TableHead>
+                      <TableHead>Status</TableHead>
+                    </>
+                  )}
+
+                  {/* Referral Report Headers */}
+                  {activeReport === "referral" && (
+                    <>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Contact #</TableHead>
+                      <TableHead>Referred By</TableHead>
+                      <TableHead>Referrer's #</TableHead>
+                      <TableHead>Counselor</TableHead>
+                      <TableHead>Lead Date</TableHead>
+                      <TableHead>Lead Status</TableHead>
+                      <TableHead>Follow Up Date</TableHead>
                     </>
                   )}
                 </TableRow>
@@ -1961,10 +2027,11 @@ export function ReportsTab() {
               <TableBody>
                 {reportData.map((item, index) => (
                   <TableRow key={index} className="hover:bg-emerald-50/50">
-                    {/* Dynamic table rows based on report type */}
+                    {/* Balance Report Rows */}
                     {activeReport === "balance" && (
                       <>
                         <TableCell className="font-medium">{item.clientName}</TableCell>
+                        <TableCell>{item.contact}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className="border-emerald-200 text-emerald-700">
                             {item.package}
@@ -1985,8 +2052,6 @@ export function ReportsTab() {
                             <div className="flex items-center gap-1 text-red-600 font-medium">
                               <AlertTriangle className="h-3 w-3" />₹{item.balance.toLocaleString()}
                             </div>
-                          ) : item.status === "No Payment" ? (
-                            <span className="text-gray-500 font-medium">No Payment</span>
                           ) : (
                             <span className="text-emerald-600 font-medium">Paid</span>
                           )}
@@ -1994,29 +2059,30 @@ export function ReportsTab() {
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <CalendarIcon className="h-3 w-3 text-slate-500" />
-                            <span className={new Date(item.dueDate) < new Date() ? "text-red-600 font-medium" : ""}>
-                              {item.dueDate !== "Never" ? new Date(item.dueDate).toLocaleDateString() : "N/A"}
+                            <span className={item.dueDays < 0 ? "text-red-600 font-medium" : ""}>
+                              {item.dueDate !== "Not Set" ? new Date(item.dueDate).toLocaleDateString() : "Not Set"}
                             </span>
                           </div>
                         </TableCell>
                         <TableCell>
                           <Badge
                             className={
-                              item.status === "Paid"
-                                ? "bg-emerald-100 text-emerald-700 border-emerald-200"
-                                : item.status === "Pending"
+                              item.dueDays < 0
+                                ? "bg-red-100 text-red-700 border-red-200"
+                                : item.dueDays <= 7
                                   ? "bg-yellow-100 text-yellow-700 border-yellow-200"
-                                  : item.status === "No Payment"
-                                    ? "bg-gray-100 text-gray-700 border-gray-200"
-                                    : "bg-red-100 text-red-700 border-red-200"
+                                  : "bg-emerald-100 text-emerald-700 border-emerald-200"
                             }
                           >
-                            {item.status}
+                            {item.dueDays} days
                           </Badge>
                         </TableCell>
-                        <TableCell>{item.paymentMethod}</TableCell>
+                        <TableCell>{item.counselor}</TableCell>
+                        <TableCell>{item.coach}</TableCell>
                       </>
                     )}
+
+                    {/* Sales Report Rows */}
                     {activeReport === "sales" && (
                       <>
                         <TableCell>
@@ -2026,6 +2092,7 @@ export function ReportsTab() {
                           </div>
                         </TableCell>
                         <TableCell className="font-medium">{item.clientName}</TableCell>
+                        <TableCell>{item.contact}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className="border-emerald-200 text-emerald-700">
                             {item.package}
@@ -2035,161 +2102,44 @@ export function ReportsTab() {
                           <div className="flex items-center gap-1">₹{item.amount.toLocaleString()}</div>
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-1">
-                            <User className="h-3 w-3 text-emerald-600" />
-                            {item.counselor}
-                          </div>
-                        </TableCell>
-                        <TableCell>
                           <Badge
                             className={
-                              item.status === "Completed"
-                                ? "bg-emerald-100 text-emerald-700 border-emerald-200"
-                                : "bg-yellow-100 text-yellow-700 border-yellow-200"
-                            }
-                          >
-                            {item.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="border-blue-200 text-blue-700">
-                            {item.source}
-                          </Badge>
-                        </TableCell>
-                      </>
-                    )}
-                    {activeReport === "followup" && (
-                      <>
-                        <TableCell className="font-medium">{item.leadName}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <User className="h-3 w-3 text-emerald-600" />
-                            {item.counselor}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <CalendarIcon className="h-3 w-3 text-slate-500" />
-                            {item.lastContact}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <Clock className="h-3 w-3 text-emerald-600" />
-                            {item.nextFollowUp}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            className={
-                              item.priority === "High"
-                                ? "bg-red-100 text-red-700 border-red-200"
-                                : item.priority === "Medium"
-                                  ? "bg-yellow-100 text-yellow-700 border-yellow-200"
-                                  : "bg-gray-100 text-gray-700 border-gray-200"
-                            }
-                          >
-                            {item.priority}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            className={
-                              item.status === "Completed"
-                                ? "bg-emerald-100 text-emerald-700 border-emerald-200"
-                                : item.status === "Scheduled"
+                              item.upsellRenewal === "Upsell"
+                                ? "bg-purple-100 text-purple-700 border-purple-200"
+                                : item.upsellRenewal === "Renewal"
                                   ? "bg-blue-100 text-blue-700 border-blue-200"
-                                  : item.status === "Overdue"
-                                    ? "bg-red-100 text-red-700 border-red-200"
-                                    : "bg-yellow-100 text-yellow-700 border-yellow-200"
+                                  : "bg-green-100 text-green-700 border-green-200"
                             }
                           >
-                            {item.status}
+                            {item.upsellRenewal}
                           </Badge>
                         </TableCell>
+                        <TableCell>{item.counselor}</TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="border-emerald-200 text-emerald-700">
-                            {item.contactMethod}
+                          {item.balance > 0 ? (
+                            <span className="text-red-600 font-medium">₹{item.balance.toLocaleString()}</span>
+                          ) : (
+                            <span className="text-emerald-600">Paid</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="border-slate-200 text-slate-700">
+                            {item.city}
                           </Badge>
                         </TableCell>
                         <TableCell>
                           <Badge variant="outline" className="border-blue-200 text-blue-700">
-                            {item.attempts}
-                          </Badge>
-                        </TableCell>
-                      </>
-                    )}
-                    {activeReport === "conversion" && (
-                      <>
-                        <TableCell className="font-medium">{item.leadName}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <CalendarIcon className="h-3 w-3 text-slate-500" />
-                            {new Date(item.leadDate).toLocaleDateString()}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <CalendarIcon className="h-3 w-3 text-emerald-600" />
-                            {item.conversionDate ? new Date(item.conversionDate).toLocaleDateString() : "N/A"}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {item.daysTaken ? (
-                            <Badge variant="outline" className="border-blue-200 text-blue-700">
-                              {item.daysTaken} days
-                            </Badge>
-                          ) : (
-                            "N/A"
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="border-emerald-200 text-emerald-700">
                             {item.source}
                           </Badge>
                         </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <User className="h-3 w-3 text-emerald-600" />
-                            {item.counselor}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            className={
-                              item.status === "Converted"
-                                ? "bg-emerald-100 text-emerald-700 border-emerald-200"
-                                : "bg-red-100 text-red-700 border-red-200"
-                            }
-                          >
-                            {item.status === "Converted" ? (
-                              <CheckCircle className="h-3 w-3 mr-1" />
-                            ) : (
-                              <XCircle className="h-3 w-3 mr-1" />
-                            )}
-                            {item.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-sm text-slate-600">{item.email}</TableCell>
-                        <TableCell>{item.paymentCount}</TableCell>
-                        <TableCell className="font-medium text-emerald-600">
-                          ₹{item.totalPaid.toLocaleString()}
-                        </TableCell>
-                        <TableCell>
-                          {item.lastPayment ? (
-                            <div className="flex items-center gap-1">
-                              <CalendarIcon className="h-3 w-3 text-slate-500" />
-                              {format(new Date(item.lastPayment), "LLL dd, yyyy")}
-                            </div>
-                          ) : (
-                            "N/A"
-                          )}
-                        </TableCell>
                       </>
                     )}
+
+                    {/* Membership Activation Rows */}
                     {activeReport === "activation" && (
                       <>
                         <TableCell className="font-medium">{item.clientName}</TableCell>
+                        <TableCell>{item.contact}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className="border-emerald-200 text-emerald-700">
                             {item.package}
@@ -2204,34 +2154,229 @@ export function ReportsTab() {
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <CalendarIcon className="h-3 w-3 text-emerald-600" />
-                            {item.activationDate === "Pending"
-                              ? "Pending"
-                              : format(new Date(item.activationDate), "LLL dd, yyyy")}
+                            {format(new Date(item.activationDate), "LLL dd, yyyy")}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-slate-500" />
+                            {item.expiryDate !== "Not Set" ? format(new Date(item.expiryDate), "LLL dd, yyyy") : "Not Set"}
                           </div>
                         </TableCell>
                         <TableCell>
                           <Badge
                             className={
-                              item.activationDelay <= 1
-                                ? "bg-emerald-100 text-emerald-700 border-emerald-200"
-                                : item.activationDelay <= 3
+                              item.leftDays <= 0
+                                ? "bg-red-100 text-red-700 border-red-200"
+                                : item.leftDays <= 30
                                   ? "bg-yellow-100 text-yellow-700 border-yellow-200"
-                                  : "bg-red-100 text-red-700 border-red-200"
+                                  : "bg-emerald-100 text-emerald-700 border-emerald-200"
                             }
                           >
-                            {item.activationDelay} days
+                            {item.leftDays} days
                           </Badge>
+                        </TableCell>
+                        <TableCell>{item.counselor}</TableCell>
+                        <TableCell>{item.coach}</TableCell>
+                      </>
+                    )}
+
+                    {/* Membership Expiry Rows */}
+                    {activeReport === "expiry" && (
+                      <>
+                        <TableCell className="font-medium">{item.clientName}</TableCell>
+                        <TableCell>{item.contact}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="border-emerald-200 text-emerald-700">
+                            {item.package}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-slate-500" />
+                            {format(new Date(item.joiningDate), "LLL dd, yyyy")}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-emerald-600" />
+                            {format(new Date(item.activationDate), "LLL dd, yyyy")}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-slate-500" />
+                            <span className={item.leftDays <= 0 ? "text-red-600 font-medium" : ""}>
+                              {format(new Date(item.expiryDate), "LLL dd, yyyy")}
+                            </span>
+                          </div>
                         </TableCell>
                         <TableCell>
                           <Badge
                             className={
-                              item.status === "Active"
+                              item.leftDays <= 0
+                                ? "bg-red-100 text-red-700 border-red-200"
+                                : item.leftDays <= 30
+                                  ? "bg-yellow-100 text-yellow-700 border-yellow-200"
+                                  : "bg-emerald-100 text-emerald-700 border-emerald-200"
+                            }
+                          >
+                            {item.leftDays} days
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{item.counselor}</TableCell>
+                        <TableCell>{item.coach}</TableCell>
+                        <TableCell>
+                          <Badge
+                            className={
+                              item.renewalStatus === "Expired"
+                                ? "bg-red-100 text-red-700 border-red-200"
+                                : item.renewalStatus === "Renewal Due"
+                                  ? "bg-yellow-100 text-yellow-700 border-yellow-200"
+                                  : item.renewalStatus === "Upcoming Renewal"
+                                    ? "bg-blue-100 text-blue-700 border-blue-200"
+                                    : "bg-emerald-100 text-emerald-700 border-emerald-200"
+                            }
+                          >
+                            {item.renewalStatus}
+                          </Badge>
+                        </TableCell>
+                      </>
+                    )}
+
+                    {/* Renewal Report Rows */}
+                    {activeReport === "renewal" && (
+                      <>
+                        <TableCell className="font-medium">{item.clientName}</TableCell>
+                        <TableCell>{item.contact}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="border-emerald-200 text-emerald-700">
+                            {item.package}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-slate-500" />
+                            {format(new Date(item.joiningDate), "LLL dd, yyyy")}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-emerald-600" />
+                            {format(new Date(item.activationDate), "LLL dd, yyyy")}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-slate-500" />
+                            <span className={item.leftDays <= 0 ? "text-red-600 font-medium" : ""}>
+                              {format(new Date(item.expiryDate), "LLL dd, yyyy")}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            className={
+                              item.leftDays <= 0
+                                ? "bg-red-100 text-red-700 border-red-200"
+                                : item.leftDays <= 30
+                                  ? "bg-yellow-100 text-yellow-700 border-yellow-200"
+                                  : "bg-emerald-100 text-emerald-700 border-emerald-200"
+                            }
+                          >
+                            {item.leftDays} days
+                          </Badge>
+                        </TableCell>
+                        <TableCell>{item.counselor}</TableCell>
+                        <TableCell>{item.coach}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="border-purple-200 text-purple-700">
+                            {item.renewalMonth}
+                          </Badge>
+                        </TableCell>
+                      </>
+                    )}
+
+                    {/* Freezing Report Rows */}
+                    {activeReport === "freezing" && (
+                      <>
+                        <TableCell className="font-medium">{item.clientName}</TableCell>
+                        <TableCell>{item.contact}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="border-blue-200 text-blue-700">
+                            {item.package}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-slate-500" />
+                            {item.activationDate !== "N/A" ? format(new Date(item.activationDate), "LLL dd, yyyy") : "N/A"}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge className="bg-blue-100 text-blue-700 border-blue-200">
+                            {item.frozenDays} days
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-slate-500" />
+                            {item.updatedExpiryDate !== "Not Set" ? format(new Date(item.updatedExpiryDate), "LLL dd, yyyy") : "Not Set"}
+                          </div>
+                        </TableCell>
+                        <TableCell>{item.counselor}</TableCell>
+                        <TableCell>{item.coach}</TableCell>
+                        <TableCell>
+                          <Badge
+                            className={
+                              item.reason === "Processed"
                                 ? "bg-emerald-100 text-emerald-700 border-emerald-200"
                                 : "bg-yellow-100 text-yellow-700 border-yellow-200"
                             }
                           >
-                            {item.status === "Active" ? (
+                            {item.reason}
+                          </Badge>
+                        </TableCell>
+                      </>
+                    )}
+
+                    {/* Follow-up Report Rows */}
+                    {activeReport === "followup" && (
+                      <>
+                        <TableCell className="font-medium">{item.name}</TableCell>
+                        <TableCell>{item.contact}</TableCell>
+                        <TableCell>{item.counselor}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-slate-500" />
+                            {format(new Date(item.lastContact), "LLL dd, yyyy")}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="border-emerald-200 text-emerald-700">
+                            {item.source}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-slate-500" />
+                            {format(new Date(item.leadDate), "LLL dd, yyyy")}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            className={
+                              item.status === "Done"
+                                ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+                                : item.status === "Failed"
+                                  ? "bg-red-100 text-red-700 border-red-200"
+                                  : "bg-yellow-100 text-yellow-700 border-yellow-200"
+                            }
+                          >
+                            {item.status === "Done" ? (
                               <CheckCircle className="h-3 w-3 mr-1" />
+                            ) : item.status === "Failed" ? (
+                              <XCircle className="h-3 w-3 mr-1" />
                             ) : (
                               <Clock className="h-3 w-3 mr-1" />
                             )}
@@ -2240,97 +2385,110 @@ export function ReportsTab() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
-                            <User className="h-3 w-3 text-emerald-600" />
-                            {item.counselor}
+                            <CalendarIcon className="h-3 w-3 text-emerald-600" />
+                            {item.followUpDate !== "Not Set" ? format(new Date(item.followUpDate), "LLL dd, yyyy") : "Not Set"}
                           </div>
                         </TableCell>
-                        <TableCell>{item.activatedBy}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="border-blue-200 text-blue-700">
+                            {item.attempts}
+                          </Badge>
+                        </TableCell>
                       </>
                     )}
-                    {activeReport === "expiry" && (
+
+                    {/* Appointment Report Rows */}
+                    {activeReport === "appointments" && (
                       <>
-                        <TableCell className="font-medium">{item.clientName}</TableCell>
+                        <TableCell className="font-medium">{item.name}</TableCell>
+                        <TableCell>{item.contact}</TableCell>
+                        <TableCell>{item.counselor}</TableCell>
+                        <TableCell>{item.bde}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="border-emerald-200 text-emerald-700">
+                            {item.source}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-slate-500" />
+                            {format(new Date(item.leadDate), "LLL dd, yyyy")}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-emerald-600" />
+                            {item.followUpDate !== "Not Set" ? format(new Date(item.followUpDate), "LLL dd, yyyy") : "Not Set"}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="border-blue-200 text-blue-700">
+                            {item.attempts}
+                          </Badge>
+                        </TableCell>
                         <TableCell>
                           <Badge
-                            variant="outline"
-                            className="border-emerald-200 text-emerald-700 whitespace-normal max-w-xs text-center px-2 py-1 break-words text-xs"
+                            className={
+                              item.appointmentStatus === "Successful"
+                                ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+                                : item.appointmentStatus === "Failed"
+                                  ? "bg-red-100 text-red-700 border-red-200"
+                                  : "bg-yellow-100 text-yellow-700 border-yellow-200"
+                            }
                           >
-                            {item.package}
+                            {item.appointmentStatus === "Successful" ? (
+                              <CheckCircle className="h-3 w-3 mr-1" />
+                            ) : item.appointmentStatus === "Failed" ? (
+                              <XCircle className="h-3 w-3 mr-1" />
+                            ) : (
+                              <Clock className="h-3 w-3 mr-1" />
+                            )}
+                            {item.appointmentStatus}
+                          </Badge>
+                        </TableCell>
+                      </>
+                    )}
+
+                    {/* Referral Report Rows */}
+                    {activeReport === "referral" && (
+                      <>
+                        <TableCell className="font-medium">{item.name}</TableCell>
+                        <TableCell>{item.contact}</TableCell>
+                        <TableCell>{item.referredBy}</TableCell>
+                        <TableCell>{item.referrerContact}</TableCell>
+                        <TableCell>{item.counselor}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <CalendarIcon className="h-3 w-3 text-slate-500" />
+                            {format(new Date(item.leadDate), "LLL dd, yyyy")}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            className={
+                              item.leadStatus === "Converted"
+                                ? "bg-emerald-100 text-emerald-700 border-emerald-200"
+                                : item.leadStatus === "Lost"
+                                  ? "bg-red-100 text-red-700 border-red-200"
+                                  : "bg-yellow-100 text-yellow-700 border-yellow-200"
+                            }
+                          >
+                            {item.leadStatus === "Converted" ? (
+                              <CheckCircle className="h-3 w-3 mr-1" />
+                            ) : item.leadStatus === "Lost" ? (
+                              <XCircle className="h-3 w-3 mr-1" />
+                            ) : (
+                              <Clock className="h-3 w-3 mr-1" />
+                            )}
+                            {item.leadStatus}
                           </Badge>
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1">
                             <CalendarIcon className="h-3 w-3 text-emerald-600" />
-                            {item.activationDate !== "No Expiry Set" ? new Date(item.activationDate).toLocaleDateString() : "N/A"}
+                            {item.followUpDate !== "Not Set" ? format(new Date(item.followUpDate), "LLL dd, yyyy") : "Not Set"}
                           </div>
                         </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <CalendarIcon className="h-3 w-3 text-slate-500" />
-                            <span className={item.daysRemaining <= 0 && item.expiryDate !== "No Expiry Set" ? "text-red-600 font-medium" : ""}>
-                              {item.expiryDate !== "No Expiry Set" ? new Date(item.expiryDate).toLocaleDateString() : "No Expiry Set"}
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {item.expiryDate !== "No Expiry Set" ? (
-                            <Badge
-                              className={
-                                item.daysRemaining <= 0
-                                  ? "bg-red-100 text-red-700 border-red-200"
-                                  : item.daysRemaining <= 30
-                                    ? "bg-yellow-100 text-yellow-700 border-yellow-200"
-                                    : "bg-emerald-100 text-emerald-700 border-emerald-200"
-                              }
-                            >
-                              {item.daysRemaining <= 0
-                                ? `${Math.abs(item.daysRemaining)} days overdue`
-                                : `${item.daysRemaining} days`}
-                            </Badge>
-                          ) : (
-                            <Badge className="bg-gray-100 text-gray-700 border-gray-200">
-                              N/A
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            className={
-                              item.status === "Active"
-                                ? "bg-emerald-100 text-emerald-700 border-emerald-200"
-                                : item.status === "Expired"
-                                  ? "bg-red-100 text-red-700 border-red-200"
-                                  : "bg-gray-100 text-gray-700 border-gray-200"
-                            }
-                          >
-                            {item.status === "Active" ? (
-                              <Activity className="h-3 w-3 mr-1" />
-                            ) : item.status === "Expired" ? (
-                              <XCircle className="h-3 w-3 mr-1" />
-                            ) : (
-                              <AlertTriangle className="h-3 w-3 mr-1" />
-                            )}
-                            {item.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            className={
-                              item.renewalStatus === "Contacted"
-                                ? "bg-blue-100 text-blue-700 border-blue-200"
-                                : item.renewalStatus === "Follow-up Required"
-                                  ? "bg-yellow-100 text-yellow-700 border-yellow-200"
-                                  : item.renewalStatus === "Urgent - Expired"
-                                    ? "bg-red-100 text-red-700 border-red-200"
-                                    : item.renewalStatus === "Contact Required"
-                                      ? "bg-orange-100 text-orange-700 border-orange-200"
-                                      : "bg-gray-100 text-gray-700 border-gray-200"
-                            }
-                          >
-                            {item.renewalStatus}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-sm text-slate-600">{item.email}</TableCell>
                       </>
                     )}
                   </TableRow>

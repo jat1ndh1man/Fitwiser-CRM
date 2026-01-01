@@ -1,10 +1,11 @@
-"use client"
+//dashbooard-tab-checkbox-filters   "use client"
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Calendar } from "@/components/ui/calendar"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
 import {
   CalendarIcon,
   TrendingUp,
@@ -143,10 +144,10 @@ export function DashboardTab() {
   
   // Filter states
   const [date, setDate] = useState<DateRange | undefined>()
-  const [statusFilter, setStatusFilter] = useState("all")
-  const [sourceFilter, setSourceFilter] = useState("all")
-  const [cityFilter, setCityFilter] = useState("all")
-  const [priorityFilter, setPriorityFilter] = useState("all")
+const [statusFilter, setStatusFilter] = useState<string[]>([])
+const [sourceFilter, setSourceFilter] = useState<string[]>([])
+const [cityFilter, setCityFilter] = useState<string[]>([])
+const [priorityFilter, setPriorityFilter] = useState<string[]>([])
   
   // Data states
   const [loading, setLoading] = useState(true)
@@ -385,61 +386,57 @@ export function DashboardTab() {
     fetchData()
   }, [])
 
-  // Enhanced filter application with multiple criteria
-  useEffect(() => {
-    let filtered = [...allLeads]
+useEffect(() => {
+  let filtered = [...allLeads]
 
-    // Apply status filter
-    if (statusFilter !== "all") {
-      filtered = filtered.filter((lead) => {
-        const leadStatus = lead.status?.toLowerCase()
-        const filterStatus = statusFilter.toLowerCase()
-        return leadStatus === filterStatus
-      })
-    }
-
-    // Apply source filter
-    if (sourceFilter !== "all") {
-      filtered = filtered.filter((lead) => {
-        const leadSource = lead.source?.toLowerCase()
-        const filterSource = sourceFilter.toLowerCase()
-        return leadSource === filterSource
-      })
-    }
-
-    // Apply city filter
-    if (cityFilter !== "all") {
-      filtered = filtered.filter((lead) => {
-        const leadCity = lead.city?.toLowerCase()
-        const filterCity = cityFilter.toLowerCase()
-        return leadCity === filterCity
-      })
-    }
-
-    // Apply priority filter
-    if (priorityFilter !== "all") {
-      filtered = filtered.filter((lead) => {
-        const leadPriority = lead.priority?.toLowerCase()
-        const filterPriority = priorityFilter.toLowerCase()
-        return leadPriority === filterPriority
-      })
-    }
-
-    // Apply date range filter
-    if (date?.from || date?.to) {
-      filtered = filtered.filter((lead) => {
-        return isDateInRange(lead.created_at, date)
-      })
-    }
-
-    console.log("🔍 Filter applied:", {
-      original: allLeads.length,
-      filtered: filtered.length,
-      filters: { statusFilter, sourceFilter, cityFilter, priorityFilter, dateRange: !!date?.from }
+  // Apply status filter
+  if (statusFilter.length > 0) {
+    filtered = filtered.filter((lead) => {
+      const leadStatus = lead.status?.toLowerCase()
+      return statusFilter.some(status => status.toLowerCase() === leadStatus)
     })
+  }
 
-    setFilteredLeads(filtered)
-  }, [allLeads, statusFilter, sourceFilter, cityFilter, priorityFilter, date])
+  // Apply source filter
+  if (sourceFilter.length > 0) {
+    filtered = filtered.filter((lead) => {
+      const leadSource = lead.source?.toLowerCase()
+      return sourceFilter.some(source => source.toLowerCase() === leadSource)
+    })
+  }
+
+  // Apply city filter
+  if (cityFilter.length > 0) {
+    filtered = filtered.filter((lead) => {
+      const leadCity = lead.city?.toLowerCase()
+      return cityFilter.some(city => city.toLowerCase() === leadCity)
+    })
+  }
+
+  // Apply priority filter
+  if (priorityFilter.length > 0) {
+    filtered = filtered.filter((lead) => {
+      const leadPriority = lead.priority?.toLowerCase()
+      return priorityFilter.some(priority => priority.toLowerCase() === leadPriority)
+    })
+  }
+
+  // Apply date range filter
+  if (date?.from || date?.to) {
+    filtered = filtered.filter((lead) => {
+      return isDateInRange(lead.created_at, date)
+    })
+  }
+
+  console.log("🔍 Filter applied:", {
+    original: allLeads.length,
+    filtered: filtered.length,
+    filters: { statusFilter, sourceFilter, cityFilter, priorityFilter, dateRange: !!date?.from }
+  })
+
+  setFilteredLeads(filtered)
+}, [allLeads, statusFilter, sourceFilter, cityFilter, priorityFilter, date])
+
 
   // Process analytics data based on filtered leads
   useEffect(() => {
@@ -625,13 +622,45 @@ useEffect(() => {
   }
 
   // Enhanced clear filters function
-  const handleClearFilters = () => {
-    setStatusFilter("all")
-    setSourceFilter("all")
-    setCityFilter("all")
-    setPriorityFilter("all")
-    setDate(undefined)
-  }
+ const handleClearFilters = () => {
+  setStatusFilter([])
+  setSourceFilter([])
+  setCityFilter([])
+  setPriorityFilter([])
+  setDate(undefined)
+}
+
+const toggleStatusFilter = (status: string) => {
+  setStatusFilter(prev => 
+    prev.includes(status) 
+      ? prev.filter(s => s !== status)
+      : [...prev, status]
+  )
+}
+
+const toggleSourceFilter = (source: string) => {
+  setSourceFilter(prev => 
+    prev.includes(source) 
+      ? prev.filter(s => s !== source)
+      : [...prev, source]
+  )
+}
+
+const toggleCityFilter = (city: string) => {
+  setCityFilter(prev => 
+    prev.includes(city) 
+      ? prev.filter(c => c !== city)
+      : [...prev, city]
+  )
+}
+
+const togglePriorityFilter = (priority: string) => {
+  setPriorityFilter(prev => 
+    prev.includes(priority) 
+      ? prev.filter(p => p !== priority)
+      : [...prev, priority]
+  )
+}
 
   // Refresh data function
   const handleRefreshData = () => {
@@ -639,7 +668,7 @@ useEffect(() => {
   }
 
   // Check if any filters are active
-  const hasActiveFilters = statusFilter !== "all" || sourceFilter !== "all" || cityFilter !== "all" || priorityFilter !== "all" || date?.from
+const hasActiveFilters = statusFilter.length > 0 || sourceFilter.length > 0 || cityFilter.length > 0 || priorityFilter.length > 0 || date?.from
 
   if (loading) {
     return (
@@ -676,129 +705,170 @@ useEffect(() => {
             </Button>
           </div>
         </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            {/* Date Range Filter */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">Date Range</label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start text-left font-normal border-emerald-200 hover:border-emerald-300 bg-transparent"
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4 text-emerald-600" />
-                    {date?.from ? (
-                      date.to ? (
-                        <>
-                          {format(date.from, "MMM dd")} - {format(date.to, "MMM dd")}
-                        </>
-                      ) : (
-                        format(date.from, "LLL dd, y")
-                      )
-                    ) : (
-                      <span>Pick date range</span>
-                    )}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    initialFocus
-                    mode="range"
-                    defaultMonth={date?.from}
-                    selected={date}
-                    onSelect={setDate}
-                    numberOfMonths={2}
-                  />
-                </PopoverContent>
-              </Popover>
-            </div>
+       <CardContent>
+  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+    {/* Date Range Filter */}
+    <div className="space-y-3">
+      <label className="text-sm font-semibold text-slate-700">Date Range</label>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            variant="outline"
+            className="w-full justify-start text-left font-normal border-emerald-200 hover:border-emerald-300 bg-transparent"
+          >
+            <CalendarIcon className="mr-2 h-4 w-4 text-emerald-600" />
+            {date?.from ? (
+              date.to ? (
+                <>
+                  {format(date.from, "MMM dd")} - {format(date.to, "MMM dd")}
+                </>
+              ) : (
+                format(date.from, "LLL dd, y")
+              )
+            ) : (
+              <span>Pick date range</span>
+            )}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="start">
+          <Calendar
+            initialFocus
+            mode="range"
+            defaultMonth={date?.from}
+            selected={date}
+            onSelect={setDate}
+            numberOfMonths={2}
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
 
-            {/* Status Filter */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">Status</label>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="border-emerald-200 hover:border-emerald-300">
-                  <SelectValue placeholder="All Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Status</SelectItem>
-                  {availableStatuses.map(status => (
-                    <SelectItem key={status} value={status.toLowerCase()}>
-                      {status.charAt(0).toUpperCase() + status.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Source Filter */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">Source</label>
-              <Select value={sourceFilter} onValueChange={setSourceFilter}>
-                <SelectTrigger className="border-emerald-200 hover:border-emerald-300">
-                  <SelectValue placeholder="All Sources" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Sources</SelectItem>
-                  {availableSources.map(source => (
-                    <SelectItem key={source} value={source.toLowerCase()}>
-                      {source.charAt(0).toUpperCase() + source.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* City Filter */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">City</label>
-              <Select value={cityFilter} onValueChange={setCityFilter}>
-                <SelectTrigger className="border-emerald-200 hover:border-emerald-300">
-                  <SelectValue placeholder="All Cities" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Cities</SelectItem>
-                  {availableCities.map(city => (
-                    <SelectItem key={city} value={city.toLowerCase()}>
-                      {city}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Priority Filter */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-slate-700">Priority</label>
-              <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-                <SelectTrigger className="border-emerald-200 hover:border-emerald-300">
-                  <SelectValue placeholder="All Priorities" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Priorities</SelectItem>
-                  {availablePriorities.map(priority => (
-                    <SelectItem key={priority} value={priority.toLowerCase()}>
-                      {priority.charAt(0).toUpperCase() + priority.slice(1)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Clear Filters Button */}
-            <div className="flex items-end">
-              <Button
-                onClick={handleClearFilters}
-                variant="outline"
-                className="w-full border-emerald-200 hover:border-emerald-300 text-emerald-600 hover:text-emerald-700 bg-transparent"
-                disabled={!hasActiveFilters}
-              >
-                Clear Filters
-              </Button>
-            </div>
+    {/* Status Filter */}
+    <div className="space-y-3">
+      <label className="text-sm font-semibold text-slate-700">
+        Status {statusFilter.length > 0 && `(${statusFilter.length})`}
+      </label>
+      <div className="space-y-2 max-h-48 overflow-y-auto p-3 border border-emerald-200 rounded-lg bg-white/50">
+        {availableStatuses.map(status => (
+          <div key={status} className="flex items-center space-x-2 hover:bg-emerald-50 p-1.5 rounded transition-colors">
+            <Checkbox
+              id={`status-${status}`}
+              checked={statusFilter.includes(status)}
+              onCheckedChange={() => toggleStatusFilter(status)}
+              className="border-emerald-300 data-[state=checked]:bg-emerald-600"
+            />
+            <Label
+              htmlFor={`status-${status}`}
+              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+            >
+              {status.charAt(0).toUpperCase() + status.slice(1)}
+            </Label>
           </div>
-        </CardContent>
+        ))}
+        {availableStatuses.length === 0 && (
+          <p className="text-sm text-slate-500 text-center py-2">No statuses available</p>
+        )}
+      </div>
+    </div>
+
+    {/* Source Filter */}
+    <div className="space-y-3">
+      <label className="text-sm font-semibold text-slate-700">
+        Source {sourceFilter.length > 0 && `(${sourceFilter.length})`}
+      </label>
+      <div className="space-y-2 max-h-48 overflow-y-auto p-3 border border-emerald-200 rounded-lg bg-white/50">
+        {availableSources.map(source => (
+          <div key={source} className="flex items-center space-x-2 hover:bg-emerald-50 p-1.5 rounded transition-colors">
+            <Checkbox
+              id={`source-${source}`}
+              checked={sourceFilter.includes(source)}
+              onCheckedChange={() => toggleSourceFilter(source)}
+              className="border-emerald-300 data-[state=checked]:bg-emerald-600"
+            />
+            <Label
+              htmlFor={`source-${source}`}
+              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+            >
+              {source.charAt(0).toUpperCase() + source.slice(1)}
+            </Label>
+          </div>
+        ))}
+        {availableSources.length === 0 && (
+          <p className="text-sm text-slate-500 text-center py-2">No sources available</p>
+        )}
+      </div>
+    </div>
+
+    {/* City Filter */}
+    <div className="space-y-3">
+      <label className="text-sm font-semibold text-slate-700">
+        City {cityFilter.length > 0 && `(${cityFilter.length})`}
+      </label>
+      <div className="space-y-2 max-h-48 overflow-y-auto p-3 border border-emerald-200 rounded-lg bg-white/50">
+        {availableCities.map(city => (
+          <div key={city} className="flex items-center space-x-2 hover:bg-emerald-50 p-1.5 rounded transition-colors">
+            <Checkbox
+              id={`city-${city}`}
+              checked={cityFilter.includes(city)}
+              onCheckedChange={() => toggleCityFilter(city)}
+              className="border-emerald-300 data-[state=checked]:bg-emerald-600"
+            />
+            <Label
+              htmlFor={`city-${city}`}
+              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+            >
+              {city}
+            </Label>
+          </div>
+        ))}
+        {availableCities.length === 0 && (
+          <p className="text-sm text-slate-500 text-center py-2">No cities available</p>
+        )}
+      </div>
+    </div>
+
+    {/* Priority Filter */}
+    <div className="space-y-3">
+      <label className="text-sm font-semibold text-slate-700">
+        Priority {priorityFilter.length > 0 && `(${priorityFilter.length})`}
+      </label>
+      <div className="space-y-2 max-h-48 overflow-y-auto p-3 border border-emerald-200 rounded-lg bg-white/50">
+        {availablePriorities.map(priority => (
+          <div key={priority} className="flex items-center space-x-2 hover:bg-emerald-50 p-1.5 rounded transition-colors">
+            <Checkbox
+              id={`priority-${priority}`}
+              checked={priorityFilter.includes(priority)}
+              onCheckedChange={() => togglePriorityFilter(priority)}
+              className="border-emerald-300 data-[state=checked]:bg-emerald-600"
+            />
+            <Label
+              htmlFor={`priority-${priority}`}
+              className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+            >
+              {priority.charAt(0).toUpperCase() + priority.slice(1)}
+            </Label>
+          </div>
+        ))}
+        {availablePriorities.length === 0 && (
+          <p className="text-sm text-slate-500 text-center py-2">No priorities available</p>
+        )}
+      </div>
+    </div>
+  </div>
+
+  {/* Clear Filters Button - Moved outside grid */}
+  <div className="mt-4 flex justify-end">
+    <Button
+      onClick={handleClearFilters}
+      variant="outline"
+      className="border-emerald-200 hover:border-emerald-300 text-emerald-600 hover:text-emerald-700 bg-transparent"
+      disabled={!hasActiveFilters}
+    >
+      <X className="h-4 w-4 mr-2" />
+      Clear All Filters
+    </Button>
+  </div>
+</CardContent>
       </Card>
 
       {/* Filter Summary */}
@@ -811,26 +881,26 @@ useEffect(() => {
                 <span>
                   Showing {filteredLeads.length} of {allLeads.length} leads
                 </span>
-                {statusFilter !== "all" && (
-                  <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs">
-                    Status: {statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}
-                  </span>
-                )}
-                {sourceFilter !== "all" && (
-                  <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs">
-                    Source: {sourceFilter.charAt(0).toUpperCase() + sourceFilter.slice(1)}
-                  </span>
-                )}
-                {cityFilter !== "all" && (
-                  <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">
-                    City: {cityFilter.charAt(0).toUpperCase() + cityFilter.slice(1)}
-                  </span>
-                )}
-                {priorityFilter !== "all" && (
-                  <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs">
-                    Priority: {priorityFilter.charAt(0).toUpperCase() + priorityFilter.slice(1)}
-                  </span>
-                )}
+               {statusFilter.length > 0 && (
+  <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs">
+    Status: {statusFilter.length} selected
+  </span>
+)}
+{sourceFilter.length > 0 && (
+  <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs">
+    Source: {sourceFilter.length} selected
+  </span>
+)}
+{cityFilter.length > 0 && (
+  <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">
+    City: {cityFilter.length} selected
+  </span>
+)}
+{priorityFilter.length > 0 && (
+  <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs">
+    Priority: {priorityFilter.length} selected
+  </span>
+)}
                 {date?.from && (
                   <span className="px-2 py-1 bg-pink-100 text-pink-700 rounded-full text-xs">
                     Date Range Applied
