@@ -1,7 +1,7 @@
 // /app/api/facebook/aggregateLeads/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { supabase } from '../../../../lib/supabase';
 import {
   FacebookPageToken,
   FacebookLead,
@@ -13,7 +13,7 @@ import {
   SkippedLead,
   SyncResult,
   SyncSummary
-} from '@/types/facebook';
+} from '../../../../types/facebook';
 
 interface RequestBody {
   user_id: string;

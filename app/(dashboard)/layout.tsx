@@ -2,10 +2,10 @@
 "use client";
 
 import React, { useState, ReactNode } from "react";
-import Sidebar from "@/components/Sidebar";
-import Header from "@/components/Header";
-import { AuthProvider } from "@/components/auth/auth-provider";
-import { AuthGuard } from "@/components/AuthGuard"; 
+import Sidebar from "../../components/Sidebar";
+import Header from "../../components/Header";
+import { AuthProvider } from "../../components/auth/auth-provider";
+import { AuthGuard } from "../../components/AuthGuard"; 
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);

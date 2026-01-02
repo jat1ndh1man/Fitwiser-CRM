@@ -1,6 +1,6 @@
 
 // app/layout.tsx
-import { AuthProvider } from "@/components/auth/auth-provider"
+import { AuthProvider } from "../components/auth/auth-provider"
 import type { Metadata } from "next"
 import "./globals.css"
 

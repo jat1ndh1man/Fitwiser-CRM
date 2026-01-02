@@ -1,11 +1,11 @@
 'use client';
 import React, { useState, useEffect } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Button } from '../../../components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../../components/ui/card';
+import { Badge } from '../../../components/ui/badge';
 import { AlertCircle, CheckCircle, Clock, RefreshCw, Download, AlertTriangle } from 'lucide-react';
-import { useLeadSync, useFetchForms } from '@/hooks/useLeadSync';
-import { SyncResult, FacebookForm } from '@/types/facebook';
+import { useLeadSync, useFetchForms } from '../../../hooks/useLeadSync';
+import { SyncResult, FacebookForm } from '../../../types/facebook';
 
 type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';
 

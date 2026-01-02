@@ -3,7 +3,7 @@
 
 import { usePathname, useRouter } from "next/navigation"
 import { useEffect, useState, useRef, useMemo } from "react"
-import { supabase } from "@/lib/supabase"
+import { supabase } from "../lib/supabase"
 import {
   LayoutDashboard,
   BarChart3,
@@ -24,11 +24,11 @@ import {
   ChevronRight,
   UserCheck2Icon
 } from "lucide-react"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Input } from "./ui/input"
+import { Button } from "./ui/button"
+import { Card, CardContent } from "./ui/card"
+import { Badge } from "./ui/badge"
+import { Avatar, AvatarFallback } from "./ui/avatar"
 import { format } from "date-fns"
 
 const pageConfig = {
