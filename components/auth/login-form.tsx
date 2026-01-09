@@ -15,7 +15,7 @@ import { supabase } from "@/lib/supabase"
 // Updated allowed role IDs with all new roles
 const ALLOWED_ROLES = [
   'b00060fe-175a-459b-8f72-957055ee8c55', // Superadmin
-  '46e786df-0272-4722-acc2-56d2a517fa9d', // Admin
+  '46e786df-0272-4f22-aec2-56d2a517fa9d', // Admin
   '11b93954-9a56-4ea5-a02c-15b731ee9dfb', // Sales Manager
   '5be42c54-a492-4604-90fa-57bced414143', // Wellness Manager
   'e032e8eb-f50b-41e1-8d16-52b17fd0903f', // Relationship Manager
@@ -38,15 +38,23 @@ export function LoginForm() {
   // Function to check if user exists and has valid role
   const checkUserAccess = async (email: string) => {
     try {
+      console.log('🔍 Checking access for email:', email)
+      
+      // Use ilike for case-insensitive email matching
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('id, email, role_id, is_active')
-        .eq('email', email.toLowerCase())
+        .ilike('email', email) // Changed from eq to ilike for case-insensitive
         .single()
 
+      console.log('📊 User data response:', userData)
+      console.log('❌ User error (if any):', userError)
+      
       if (userError) {
+        console.log('Error code:', userError.code)
         if (userError.code === 'PGRST116') {
           // No user found
+          console.log('🚫 No user found with email:', email)
           return { 
             isValid: false, 
             error: "Access denied. You are not authorized to use this system." 
@@ -55,8 +63,15 @@ export function LoginForm() {
         throw userError
       }
 
+      console.log('✅ User found:', userData.email)
+      console.log('📝 User role_id:', userData.role_id)
+      console.log('🔒 Is user active?:', userData.is_active)
+      console.log('📋 Allowed roles:', ALLOWED_ROLES)
+      console.log('🔍 Checking if role is in allowed list:', ALLOWED_ROLES.includes(userData.role_id))
+
       // Check if user is active
       if (!userData.is_active) {
+        console.log('🚫 User account is inactive')
         return { 
           isValid: false, 
           error: "Your account has been deactivated. Please contact your administrator." 
@@ -64,24 +79,69 @@ export function LoginForm() {
       }
 
       // Check if user has a valid role
-      if (!userData.role_id || !ALLOWED_ROLES.includes(userData.role_id)) {
+      if (!userData.role_id) {
+        console.log('🚫 User has no role assigned')
         return { 
           isValid: false, 
-          error: "Access denied. You don't have sufficient permissions to access this system." 
+          error: "Access denied. No role assigned to your account. Please contact your administrator." 
         }
       }
 
+      if (!ALLOWED_ROLES.includes(userData.role_id)) {
+        console.log('🚫 User role not in allowed list')
+        console.log('User role_id:', userData.role_id)
+        console.log('Is UUID?', /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userData.role_id))
+        return { 
+          isValid: false, 
+          error: `Access denied. You don't have sufficient permissions to access this system. (Role ID: ${userData.role_id})` 
+        }
+      }
+
+      console.log('🎉 User access granted!')
       return { 
         isValid: true, 
         userData 
       }
     } catch (error) {
-      console.error('Error checking user access:', error)
+      console.error('🔥 Error checking user access:', error)
       return { 
         isValid: false, 
         error: "An error occurred while verifying your access. Please try again." 
       }
     }
+  }
+
+  // Debug function to test database connection
+  const debugDatabase = async () => {
+    console.log('🔧 Running database debug...')
+    
+    // Test 1: Check if we can query users table
+    const { data: users, error: usersError } = await supabase
+      .from('users')
+      .select('email, role_id, is_active')
+      .limit(5)
+    
+    console.log('📋 First 5 users in database:', users)
+    console.log('❌ Users query error:', usersError)
+    
+    // Test 2: Check roles table structure
+    const { data: roles, error: rolesError } = await supabase
+      .from('roles')
+      .select('id, name')
+      .order('name')
+    
+    console.log('📋 Roles in database:', roles)
+    console.log('❌ Roles query error:', rolesError)
+    
+    // Test 3: Check specific user
+    const testEmail = 'test@example.com' // Replace with actual test email
+    const { data: testUser } = await supabase
+      .from('users')
+      .select('*')
+      .ilike('email', testEmail)
+      .single()
+    
+    console.log('🔍 Test user data:', testUser)
   }
 
   const handleSendOTP = async (e: React.FormEvent) => {
@@ -92,24 +152,32 @@ export function LoginForm() {
 
     try {
       // First check if user exists and has valid role
+      console.log('📤 Starting OTP send process for:', email)
       const accessCheck = await checkUserAccess(email)
       
+      console.log('📝 Access check result:', accessCheck)
+      
       if (!accessCheck.isValid) {
+        console.log('🚫 Access check failed:', accessCheck.error)
         setError(accessCheck.error!)
         setLoading(false)
         return
       }
 
       // If user is valid, send OTP
+      console.log('✅ User has valid access, sending OTP...')
       const { error } = await signInWithOTP(email)
 
       if (error) {
+        console.log('❌ OTP send error:', error)
         setError(error.message)
       } else {
+        console.log('✅ OTP sent successfully')
         setOtpSent(true)
         setMessage("OTP sent to your email successfully!")
       }
-    } catch {
+    } catch (error) {
+      console.error('🔥 Unexpected error in handleSendOTP:', error)
       setError("An unexpected error occurred while sending OTP")
     } finally {
       setLoading(false)
@@ -124,29 +192,39 @@ export function LoginForm() {
 
     try {
       // Verify OTP first
+      console.log('🔐 Verifying OTP for:', email)
       const { data, error } = await verifyOTP({
         email,
         token: otp,
         type: "email",
       })
 
+      console.log('📊 OTP verification response:', { data, error })
+
       if (error) {
+        console.log('❌ OTP verification error:', error)
         setError(error.message)
       } else if (data?.user) {
         // Double-check user access after successful OTP verification
+        console.log('✅ OTP verified, checking user access again...')
         const accessCheck = await checkUserAccess(email)
         
+        console.log('📝 Post-OTP access check:', accessCheck)
+        
         if (!accessCheck.isValid) {
+          console.log('🚫 Post-OTP access check failed:', accessCheck.error)
           setError(accessCheck.error!)
           // Sign out the user since they shouldn't have access
           await supabase.auth.signOut()
           return
         }
 
+        console.log('✅ All checks passed, redirecting to dashboard...')
         setMessage("Login successful! Redirecting...")
         router.push("/dashboard")
       }
-    } catch {
+    } catch (error) {
+      console.error('🔥 Unexpected error in handleVerifyOTP:', error)
       setError("An unexpected error occurred during verification")
     } finally {
       setLoading(false)
@@ -160,6 +238,7 @@ export function LoginForm() {
 
     try {
       // Check user access again before resending
+      console.log('🔄 Resending OTP for:', email)
       const accessCheck = await checkUserAccess(email)
       
       if (!accessCheck.isValid) {
@@ -190,9 +269,24 @@ export function LoginForm() {
     setError("")
   }
 
+  // Add debug button for testing (remove in production)
+  const handleDebug = async () => {
+    console.log('=== DEBUG MODE ===')
+    await debugDatabase()
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-emerald-50 p-4">
       <div className="w-full max-w-md">
+        {/* Debug button (remove in production) */}
+        <button 
+          onClick={handleDebug}
+          className="fixed top-4 right-4 bg-gray-800 text-white px-3 py-1 rounded text-xs opacity-50 hover:opacity-100"
+          style={{ zIndex: 1000 }}
+        >
+          Debug DB
+        </button>
+
         {/* Logo/Brand Section */}
         <div className="text-center mb-8">
           <div className="flex justify-center">
