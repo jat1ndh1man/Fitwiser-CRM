@@ -1,8 +1,8 @@
 // /app/api/facebook/automatedLeadSync/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
-import { SyncResult } from '@/types/facebook';
+import { supabase } from '../../../../lib/supabase';
+import { SyncResult } from '../../../../types/facebook';
 
 interface UserSyncResult extends SyncResult {
   user_id: string;

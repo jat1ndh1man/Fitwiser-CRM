@@ -3,14 +3,14 @@
 import type React from "react"
 import { useState } from "react"
 import { useRouter } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card"
+import { Button } from "../ui/button"
+import { Input } from "../ui/input"
+import { Label } from "../ui/label"
+import { Alert, AlertDescription } from "../ui/alert"
 import { Loader2, Mail, Shield, CheckCircle, ArrowRight, KeyRound } from "lucide-react"
-import { signInWithOTP, verifyOTP } from "@/lib/supabase"
-import { supabase } from "@/lib/supabase"
+import { signInWithOTP, verifyOTP } from "../../lib/supabase"
+import { supabase } from "../../lib/supabase"
 
 // Updated allowed role IDs with all new roles
 const ALLOWED_ROLES = [

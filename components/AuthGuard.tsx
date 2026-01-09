@@ -3,7 +3,7 @@
 
 import { ReactNode, useEffect, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '../lib/supabase'
 import { Loader2 } from 'lucide-react'
 
 export function AuthGuard({ children }: { children: ReactNode }) {

@@ -2,9 +2,9 @@
 
 import type React from "react"
 import { useAuth } from "./auth-provider"
-import { hasPermission } from "@/lib/supabase"
+import { hasPermission } from "../../lib/supabase"
 import { AlertTriangle, Lock } from "lucide-react"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription } from "../ui/alert"
 
 interface RBACWrapperProps {
   children: React.ReactNode

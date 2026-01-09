@@ -1,11 +1,11 @@
 //dashbooard-tab-checkbox-filters   "use client"
 import { useState, useEffect } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Calendar } from "@/components/ui/calendar"
-import { Button } from "@/components/ui/button"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Label } from "@/components/ui/label"
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card"
+import { Calendar } from "./ui/calendar"
+import { Button } from "./ui/button"
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover"
+import { Checkbox } from "./ui/checkbox"
+import { Label } from "./ui/label"
 import {
   CalendarIcon,
   TrendingUp,
@@ -23,7 +23,7 @@ import {
 } from "lucide-react"
 import { format } from "date-fns"
 import type { DateRange } from "react-day-picker"
-import { supabase } from "@/lib/supabase"
+import { supabase } from "../lib/supabase"
 import { useRouter } from "next/navigation"
 
 interface Lead {

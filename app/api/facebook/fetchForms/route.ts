@@ -1,12 +1,12 @@
 // /app/api/facebook/fetchForms/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { supabase } from '../../../../lib/supabase';
 import { 
   FacebookPageToken, 
   FacebookForm, 
   FacebookFormResponse 
-} from '@/types/facebook';
+} from '../../../../types/facebook';
 
 interface RequestBody {
   user_id: string;

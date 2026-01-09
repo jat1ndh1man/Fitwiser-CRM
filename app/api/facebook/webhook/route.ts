@@ -2,14 +2,14 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { supabase } from '@/lib/supabase';
+import { supabase } from '../../../../lib/supabase';
 import { 
   WebhookEntry, 
   WebhookLeadgenData, 
   FacebookPageToken,
   ExtractedLeadInfo,
   LeadRow 
-} from '@/types/facebook';
+} from '../../../../types/facebook';
 
 const WEBHOOK_VERIFY_TOKEN = process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN;
 const APP_SECRET = process.env.FACEBOOK_APP_SECRET;

@@ -1,6 +1,6 @@
  "use client"
 
-import LeadInformationTab from "@/components/lead-information-tab"
+import LeadInformationTab from "../../../components/lead-information-tab"
 
  
  

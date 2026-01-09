@@ -1,7 +1,7 @@
 // /hooks/useLeadSync.ts
 
 import { useState, useCallback } from 'react';
-import { SyncResult } from '@/types/facebook';
+import { SyncResult } from '../types/facebook';
 
 interface UseLeadSyncReturn {
   syncLeads: (userId: string) => Promise<SyncResult>;
